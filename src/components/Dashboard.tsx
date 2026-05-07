@@ -55,6 +55,7 @@ export default function Dashboard() {
   const [stats, setStats] = useState<BotStats | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [connectionError, setConnectionError] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
@@ -66,16 +67,16 @@ export default function Dashboard() {
         fetch(`${BOT_API}/api/bot/stats`),
         fetch(`${BOT_API}/api/bot/logs`),
       ]);
-      if (statsRes.ok) {
-        const statsData = await statsRes.json();
-        setStats(statsData);
+      if (!statsRes.ok || !logsRes.ok) {
+        throw new Error(`HTTP ${statsRes.status}/${logsRes.status}`);
       }
-      if (logsRes.ok) {
-        const logsData = await logsRes.json();
-        setLogs(logsData);
-      }
+      const [statsData, logsData] = await Promise.all([statsRes.json(), logsRes.json()]);
+      setStats(statsData);
+      setLogs(logsData);
+      setConnectionError(false);
     } catch (error) {
       console.error('Error fetching data:', error);
+      setConnectionError(true);
     } finally {
       setIsRefreshing(false);
     }
@@ -103,12 +104,25 @@ export default function Dashboard() {
     }
   };
 
-  const statusColor =
-    stats?.status === 'running'
-      ? 'text-emerald-400'
-      : stats?.status === 'error'
-      ? 'text-red-400'
-      : 'text-amber-400';
+  const statusLabel = connectionError
+    ? 'Offline'
+    : stats
+    ? stats.status.charAt(0).toUpperCase() + stats.status.slice(1)
+    : 'Connecting…';
+
+  const statusColor = connectionError
+    ? 'text-red-400'
+    : stats?.status === 'running'
+    ? 'text-emerald-400'
+    : stats?.status === 'error'
+    ? 'text-red-400'
+    : 'text-amber-400';
+
+  const statusDotColor = connectionError
+    ? 'bg-red-400'
+    : stats?.status === 'running'
+    ? 'bg-emerald-400'
+    : 'bg-amber-400';
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#0a0e1a' }}>
@@ -146,17 +160,8 @@ export default function Dashboard() {
 
         <div className="px-4 py-4 border-t border-gray-800">
           <div className="flex items-center gap-2">
-            <span
-              className={cn(
-                'w-2 h-2 rounded-full',
-                stats?.status === 'running' ? 'bg-emerald-400' : 'bg-amber-400'
-              )}
-            />
-            <span className={cn('text-xs font-medium', statusColor)}>
-              {stats
-                ? stats.status.charAt(0).toUpperCase() + stats.status.slice(1)
-                : 'Connecting…'}
-            </span>
+            <span className={cn('w-2 h-2 rounded-full', statusDotColor)} />
+            <span className={cn('text-xs font-medium', statusColor)}>{statusLabel}</span>
           </div>
         </div>
       </aside>
@@ -220,6 +225,12 @@ export default function Dashboard() {
         </header>
 
         <main className="flex-1 overflow-y-auto p-5 space-y-4">
+          {connectionError && (
+            <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-300">
+              Cannot reach bot API at <code className="font-mono">{BOT_API || '/api/bot'}</code>.
+              Check the Vercel rewrite, the bot service on the VPS, and the browser console for details.
+            </div>
+          )}
           <StatsGrid stats={stats} />
           <EquityChart />
 
