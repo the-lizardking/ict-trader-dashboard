@@ -1,59 +1,58 @@
-# ICT Streamlit Dashboard
+# ICT Trader Dashboard
 
-## Project Overview
-This project is a Streamlit dashboard designed to interact with multiple data sources, mainly focusing on the Fake data generator and SSH protocol. The dashboard provides an intuitive interface for visualizing and analyzing data.
+Live trading dashboard for the ICT Trading Bot. Built with React 19 + Vite + Tailwind CSS v4, deployed on Vercel.
 
-## Setup Instructions
-1. **Clone the repository**:
-   ```bash
-   git clone https://github.com/the-lizardking/ict-streamlit-dashboard.git
-   cd ict-streamlit-dashboard
-   ```
-2. **Install the required dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. **Run the application**:
-   ```bash
-   streamlit run app.py
-   ```
+## Features
 
-## How to Use Each Data Source
-### Fake Data Source
-- This data source simulates realistic data and is primarily used for testing purposes.
-- To use it, simply select the "Fake Data" option in the dashboard. Customizable parameters allow you to generate user-defined datasets.
+- **Live metrics** — 24h PnL, open trades, win rate, VM health (CPU/RAM/disk)
+- **Equity curve** — area chart of account equity over time
+- **ICT strategy monitor** — active/paused status of running strategies
+- **Live log feed** — terminal-style feed of bot events with level badges
+- **AI Analysis** — Gemini-powered ICT market analysis from recent log data
 
-### SSH Data Source
-- This functionality allows you to connect to a remote server via SSH to fetch live data.
-- Provide your server credentials and specify the command to retrieve the required data in the dashboard. Always ensure to follow security best practices when handling SSH.
+## Architecture
 
-## Architecture Explanation
-The dashboard is built using Streamlit, with a modular architecture:
-- **Frontend**: Streamlit for creating the user interface.
-- **Backend**: Python scripts handling data fetching and processing from both data sources.
-- **Data Sources**: Initializes the Fake data generator and manages SSH connections for live data.
+```
+Vercel (SPA) ──HTTPS──▶ VPS FastAPI :8001
+                          /api/bot/stats
+                          /api/bot/logs
+                          /api/bot/positions
+                          /api/bot/signals
+```
 
-## Guidelines for AI Bots Editing the Repo
-### Code Standards
-- Follow PEP 8 style guide for Python code.
-- Use meaningful variable names and comments for better readability.
-- Ensure that all functions have docstrings explaining their purpose.
-- Add type hints to function signatures for clarity.
-- Keep functions small and focused on a single responsibility.
+No SSH tunneling. No Express server. Pure static build calling the bot's public REST API.
 
-### Development Practices
-- Always create a new branch for each feature or bug fix.
-- Write clear and concise commit messages following conventional commits format.
-- Test your changes locally before pushing to the remote repository.
-- Open pull requests for review on significant changes.
-- Maintain the existing code structure and module organization.
-- Update documentation when adding new features or modifying existing functionality.
+## Setup
 
-### File Structure Guidelines
-- Keep data source implementations in data_sources.py.
-- UI components and page logic should remain in app.py.
-- Store environment variables in a .env file (never commit to repo).
-- Add dependencies to requirements.txt when adding new packages.
+```bash
+npm install
+cp .env.example .env
+# Edit .env:
+#   VITE_BOT_API_URL=https://your-vps:8001
+#   GEMINI_API_KEY=your_key
+npm run dev
+```
 
-## Conclusion
-Feel free to explore the functionalities and experiment with different data sources in the ICT Streamlit Dashboard. If you encounter any issues or have suggestions, please open an issue in this repository!
+## Vercel Deployment
+
+1. Push to GitHub
+2. Import repo in Vercel dashboard
+3. Add environment variables:
+   - `VITE_BOT_API_URL` — bot API public URL (no trailing slash)
+   - `GEMINI_API_KEY` — Google AI Studio key
+4. Deploy — `vercel.json` handles SPA routing automatically
+
+## Bot API Setup
+
+The `ict-trading-bot` repo exposes the required endpoints via FastAPI on port 8001.
+On the VPS, set in the systemd service environment:
+
+```
+DASHBOARD_ORIGIN=https://your-vercel-app.vercel.app
+```
+
+This enables CORS for the Vercel domain.
+
+## Related
+
+- [ict-trading-bot](https://github.com/the-lizardking/ict-trading-bot) — Python trading bot + FastAPI data feed
