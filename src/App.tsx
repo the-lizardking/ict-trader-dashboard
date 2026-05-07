@@ -1,1 +1,5 @@
-// React App code here
+import Dashboard from './components/Dashboard';
+
+export default function App() {
+  return <Dashboard />;
+}
