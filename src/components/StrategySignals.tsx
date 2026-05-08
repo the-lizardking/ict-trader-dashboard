@@ -3,6 +3,7 @@ import { cn } from '../lib/utils';
 
 interface StrategySignalsProps {
   signals: Signal[] | null;
+  error?: { httpStatus: number; label?: string } | null;
 }
 
 interface PatternRow {
@@ -42,8 +43,17 @@ function isShort(side: string) {
   return s === 'sell' || s === 'short';
 }
 
-export default function StrategySignals({ signals }: StrategySignalsProps) {
+export default function StrategySignals({ signals, error }: StrategySignalsProps) {
   if (signals === null) {
+    if (error) {
+      const hint = error.label || (error.httpStatus ? `HTTP ${error.httpStatus}` : 'Network error');
+      return (
+        <div className="metric-card">
+          <h3 className="text-sm font-semibold text-gray-200 mb-3">Active ICT Strategies</h3>
+          <p className="text-xs text-red-300 py-4 text-center">Signals unavailable ({hint})</p>
+        </div>
+      );
+    }
     return (
       <div className="metric-card">
         <h3 className="text-sm font-semibold text-gray-200 mb-3">Active ICT Strategies</h3>

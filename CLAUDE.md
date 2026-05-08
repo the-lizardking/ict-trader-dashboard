@@ -65,14 +65,14 @@ Local dev does NOT use the Vercel rewrite. Either run the bot locally on `:8001`
 ```
 src/
   components/
-    Dashboard.tsx        — main layout, polling loop, header, sidebar, modals, connection-error banner
+    Dashboard.tsx        — main layout, polling loop, header, collapsible/mobile sidebar, modals, connection banners (allFailed vs partial)
     EquityChart.tsx      — Recharts area chart driven by a rolling totalPnL buffer (data prop)
     StatsGrid.tsx        — 4 metric cards (PnL, orders, status, infra)
     LogViewer.tsx        — terminal-style scrollable log feed
     PositionsPanel.tsx   — open trades from /api/bot/positions
     StrategySignals.tsx  — recent signals aggregated by pattern from /api/bot/signals
   services/
-    api.ts               — typed fetchers (getStats/getLogs/getPositions/getSignals/getDashboardSnapshot) + BotApiError
+    api.ts               — typed fetchers (getStats/getLogs/getPositions/getSignals) with AbortController timeout, getDashboardSnapshot uses Promise.allSettled so one failing endpoint doesn't blank the dashboard, BotApiError carries httpStatus (0 = network/timeout)
     geminiService.ts     — Gemini AI market analysis call
   lib/
     utils.ts             — cn() helper (clsx + tailwind-merge)

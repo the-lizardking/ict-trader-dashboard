@@ -8,15 +8,22 @@ const levelConfig = {
 };
 
 interface LogViewerProps {
-  logs: LogEntry[];
+  logs: LogEntry[] | null;
+  error?: { httpStatus: number; label?: string } | null;
 }
 
-export default function LogViewer({ logs }: LogViewerProps) {
+export default function LogViewer({ logs, error }: LogViewerProps) {
   return (
     <div className="metric-card h-80 flex flex-col">
       <h3 className="text-sm font-semibold text-gray-200 mb-3">Live Feed</h3>
       <div className="flex-1 overflow-y-auto space-y-1 font-mono text-xs">
-        {logs.length === 0 ? (
+        {logs === null && error ? (
+          <p className="text-red-300 text-center py-8">
+            Logs unavailable ({error.label || (error.httpStatus ? `HTTP ${error.httpStatus}` : 'Network error')})
+          </p>
+        ) : logs === null ? (
+          <p className="text-gray-500 text-center py-8">Connecting to bot…</p>
+        ) : logs.length === 0 ? (
           <p className="text-gray-500 text-center py-8">No log entries</p>
         ) : (
           logs.map((entry) => {
