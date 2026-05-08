@@ -11,6 +11,7 @@ import {
   RefreshCw,
   Bot,
   AlertTriangle,
+  CloudOff,
   Sparkles,
   Menu,
   X,
@@ -70,6 +71,72 @@ interface SectionErr {
 function toErr(e: BotApiError | null): SectionErr | null {
   if (!e) return null;
   return { httpStatus: e.httpStatus, message: e.message, label: describeError(e) };
+}
+
+function relativeTime(from: Date, now: Date): string {
+  const sec = Math.max(0, Math.floor((now.getTime() - from.getTime()) / 1000));
+  if (sec < 5) return 'just now';
+  if (sec < 60) return `${sec}s ago`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
+}
+
+function OfflinePanel({
+  kind,
+  httpStatus,
+  lastSeen,
+  onRetry,
+  retrying,
+}: {
+  kind: string;
+  httpStatus: number;
+  lastSeen: Date | null;
+  onRetry: () => void;
+  retrying: boolean;
+}) {
+  const detail = httpStatus ? `${kind} (HTTP ${httpStatus})` : kind;
+  return (
+    <div className="rounded-lg border border-red-500/30 bg-red-500/5 p-5 sm:p-6">
+      <div className="flex items-start gap-3">
+        <CloudOff size={20} className="text-red-300 shrink-0 mt-0.5" />
+        <div className="flex-1 min-w-0">
+          <h2 className="text-sm font-semibold text-red-200">Bot offline</h2>
+          <p className="text-xs text-red-300/90 mt-1">
+            The trading bot's API is not responding. Live data is paused until it
+            comes back. The dashboard will reconnect automatically.
+          </p>
+          <dl className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs">
+            <div className="flex gap-2">
+              <dt className="text-gray-500">Reason</dt>
+              <dd className="text-gray-300 truncate" title={detail}>{detail}</dd>
+            </div>
+            <div className="flex gap-2">
+              <dt className="text-gray-500">Last seen</dt>
+              <dd className="text-gray-300">
+                {lastSeen ? relativeTime(lastSeen, new Date()) : 'never this session'}
+              </dd>
+            </div>
+          </dl>
+          <div className="mt-4 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={onRetry}
+              disabled={retrying}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-red-600/20 hover:bg-red-600/30 text-red-200 border border-red-500/40 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <RefreshCw size={12} className={retrying ? 'animate-spin' : ''} />
+              {retrying ? 'Retrying…' : 'Retry now'}
+            </button>
+            <span className="text-[10px] text-gray-500">auto-retry every 3s</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -407,24 +474,31 @@ export default function Dashboard() {
 
         <main className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
           {allFailed ? (
-            <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-300">
-              Cannot reach bot API. Check the Vercel rewrite, the bot service on
-              the VPS, and the browser console for details.
-            </div>
-          ) : anyError ? (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
-              Some bot endpoints are returning errors — affected panels are flagged below. Other data is still live.
-            </div>
-          ) : null}
-          <StatsGrid stats={stats} error={stats ? null : statsErr} />
-          <EquityChart data={equityHistory} />
+            <OfflinePanel
+              kind={statsErr?.label || 'Network error'}
+              httpStatus={statsErr?.httpStatus ?? 0}
+              lastSeen={lastSuccessAt}
+              onRetry={fetchData}
+              retrying={isRefreshing}
+            />
+          ) : (
+            <>
+              {anyError && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
+                  Some bot endpoints are returning errors — affected panels are flagged below. Other data is still live.
+                </div>
+              )}
+              <StatsGrid stats={stats} error={stats ? null : statsErr} />
+              <EquityChart data={equityHistory} />
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <StrategySignals signals={signals} error={signals ? null : signalsErr} />
-            <PositionsPanel positions={positions} error={positions ? null : positionsErr} />
-          </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <StrategySignals signals={signals} error={signals ? null : signalsErr} />
+                <PositionsPanel positions={positions} error={positions ? null : positionsErr} />
+              </div>
 
-          <LogViewer logs={logs} error={logs ? null : logsErr} />
+              <LogViewer logs={logs} error={logs ? null : logsErr} />
+            </>
+          )}
         </main>
       </div>
 
