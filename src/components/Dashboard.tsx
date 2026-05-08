@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard,
@@ -14,14 +14,18 @@ import {
   Sparkles,
   X,
 } from 'lucide-react';
-import { BotStats, LogEntry } from '../types';
+import { BotStats, LogEntry, Position, Signal, EquityPoint } from '../types';
 import StatsGrid from './StatsGrid';
 import EquityChart from './EquityChart';
 import LogViewer from './LogViewer';
+import PositionsPanel from './PositionsPanel';
+import StrategySignals from './StrategySignals';
+import { getDashboardSnapshot } from '../services/api';
 import { getMarketAnalysis } from '../services/geminiService';
 import { cn } from '../lib/utils';
 
-const BOT_API = import.meta.env.VITE_BOT_API_URL ?? '';
+const POLL_INTERVAL_MS = 10_000;
+const EQUITY_BUFFER_MAX = 60;
 
 const NAV_SECTIONS = [
   {
@@ -43,39 +47,57 @@ const NAV_SECTIONS = [
   },
 ];
 
-const ACTIVE_STRATEGIES = [
-  { name: 'FVG Reversal v3', status: 'active', pnl: '+2.4%' },
-  { name: 'London Open Killzone', status: 'active', pnl: '+1.1%' },
-  { name: 'OTE Scalper', status: 'paused', pnl: '0.0%' },
-  { name: 'Silver Bullet', status: 'active', pnl: '+0.8%' },
-];
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
 
 export default function Dashboard() {
   const [activeNav, setActiveNav] = useState('overview');
   const [stats, setStats] = useState<BotStats | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [positions, setPositions] = useState<Position[] | null>(null);
+  const [signals, setSignals] = useState<Signal[] | null>(null);
+  const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [connectionError, setConnectionError] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showAiModal, setShowAiModal] = useState(false);
 
+  const lastEquitySampleRef = useRef<number | null>(null);
+
   const fetchData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const [statsRes, logsRes] = await Promise.all([
-        fetch(`${BOT_API}/api/bot/stats`),
-        fetch(`${BOT_API}/api/bot/logs`),
-      ]);
-      if (!statsRes.ok || !logsRes.ok) {
-        throw new Error(`HTTP ${statsRes.status}/${logsRes.status}`);
-      }
-      const [statsData, logsData] = await Promise.all([statsRes.json(), logsRes.json()]);
-      setStats(statsData);
-      setLogs(logsData);
+      const snapshot = await getDashboardSnapshot();
+      setStats(snapshot.stats);
+      setLogs(snapshot.logs);
+      setPositions(snapshot.positions);
+      setSignals(snapshot.signals);
       setConnectionError(false);
+
+      // Append a point to the rolling equity buffer; collapse duplicate
+      // values so a flat PnL doesn't grow the buffer faster than necessary.
+      const totalPnL = snapshot.stats.totalPnL;
+      if (lastEquitySampleRef.current !== totalPnL) {
+        lastEquitySampleRef.current = totalPnL;
+        setEquityHistory((prev) => {
+          const next = [
+            ...prev,
+            { time: formatTime(new Date()), equity: totalPnL },
+          ];
+          return next.length > EQUITY_BUFFER_MAX
+            ? next.slice(next.length - EQUITY_BUFFER_MAX)
+            : next;
+        });
+      }
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching dashboard snapshot:', error);
       setConnectionError(true);
     } finally {
       setIsRefreshing(false);
@@ -84,7 +106,7 @@ export default function Dashboard() {
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 10_000);
+    const interval = setInterval(fetchData, POLL_INTERVAL_MS);
     return () => clearInterval(interval);
   }, [fetchData]);
 
@@ -123,6 +145,8 @@ export default function Dashboard() {
     : stats?.status === 'running'
     ? 'bg-emerald-400'
     : 'bg-amber-400';
+
+  const openSymbols = positions ? Array.from(new Set(positions.map((p) => p.symbol))).join(', ') : '';
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ backgroundColor: '#0a0e1a' }}>
@@ -174,18 +198,24 @@ export default function Dashboard() {
         >
           <div className="flex items-center gap-4">
             <div>
-              <p className="text-xs text-gray-500">Symbol</p>
-              <p className="text-sm font-semibold text-gray-100">BTCUSDT</p>
+              <p className="text-xs text-gray-500">Open Positions</p>
+              <p className="text-sm font-semibold text-gray-100">
+                {positions === null ? '—' : positions.length}
+              </p>
             </div>
             <div className="w-px h-8 bg-gray-800" />
             <div>
-              <p className="text-xs text-gray-500">Daily Bias</p>
-              <p className="text-sm font-semibold text-emerald-400">Bullish</p>
+              <p className="text-xs text-gray-500">Symbols</p>
+              <p className="text-sm font-semibold text-gray-100">
+                {openSymbols || '—'}
+              </p>
             </div>
             <div className="w-px h-8 bg-gray-800" />
             <div>
-              <p className="text-xs text-gray-500">Volatility</p>
-              <p className="text-sm font-semibold text-amber-400">Medium</p>
+              <p className="text-xs text-gray-500">Recent Signals</p>
+              <p className="text-sm font-semibold text-gray-100">
+                {signals === null ? '—' : signals.length}
+              </p>
             </div>
           </div>
 
@@ -217,7 +247,11 @@ export default function Dashboard() {
               <Sparkles size={13} />
               AI Analysis
             </button>
-            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-red-600/20 hover:bg-red-600/40 text-red-400 border border-red-600/30 transition-colors">
+            <button
+              disabled
+              title="Wire to bot /halt endpoint in a follow-up"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs bg-red-600/20 text-red-400 border border-red-600/30 opacity-60 cursor-not-allowed"
+            >
               <AlertTriangle size={13} />
               FORCED STOP
             </button>
@@ -227,78 +261,16 @@ export default function Dashboard() {
         <main className="flex-1 overflow-y-auto p-5 space-y-4">
           {connectionError && (
             <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-300">
-              Cannot reach bot API at <code className="font-mono">{BOT_API || '/api/bot'}</code>.
-              Check the Vercel rewrite, the bot service on the VPS, and the browser console for details.
+              Cannot reach bot API. Check the Vercel rewrite, the bot service on
+              the VPS, and the browser console for details.
             </div>
           )}
           <StatsGrid stats={stats} />
-          <EquityChart />
+          <EquityChart data={equityHistory} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div className="metric-card">
-              <h3 className="text-sm font-semibold text-gray-200 mb-3">Active ICT Strategies</h3>
-              <div className="space-y-2">
-                {ACTIVE_STRATEGIES.map((s) => (
-                  <div
-                    key={s.name}
-                    className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          'w-1.5 h-1.5 rounded-full',
-                          s.status === 'active' ? 'bg-emerald-400' : 'bg-gray-600'
-                        )}
-                      />
-                      <span className="text-sm text-gray-300">{s.name}</span>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="text-xs text-gray-500 capitalize">{s.status}</span>
-                      <span
-                        className={cn(
-                          'text-sm font-mono font-semibold',
-                          s.pnl.startsWith('+') ? 'text-emerald-400' : 'text-gray-400'
-                        )}
-                      >
-                        {s.pnl}
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="metric-card">
-              <h3 className="text-sm font-semibold text-gray-200 mb-3">Trading Conditions</h3>
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Spread</span>
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 w-24 bg-gray-800 rounded-full overflow-hidden">
-                      <div className="h-full w-1/4 bg-emerald-500 rounded-full" />
-                    </div>
-                    <span className="text-xs text-gray-400 w-8 text-right">Low</span>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Volatility Index</span>
-                  <div className="flex items-center gap-2">
-                    <div className="h-1.5 w-24 bg-gray-800 rounded-full overflow-hidden">
-                      <div className="h-full w-1/2 bg-amber-500 rounded-full" />
-                    </div>
-                    <span className="text-xs text-gray-400 w-8 text-right">Med</span>
-                  </div>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Session</span>
-                  <span className="text-xs text-blue-400 font-medium">London Open</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-400">Market Phase</span>
-                  <span className="text-xs text-gray-300">Accumulation</span>
-                </div>
-              </div>
-            </div>
+            <StrategySignals signals={signals} />
+            <PositionsPanel positions={positions} />
           </div>
 
           <LogViewer logs={logs} />
