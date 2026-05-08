@@ -22,6 +22,9 @@ import EquityChart from './EquityChart';
 import LogViewer from './LogViewer';
 import PositionsPanel from './PositionsPanel';
 import StrategySignals from './StrategySignals';
+import JournalsTab from './JournalsTab';
+import Placeholder from './Placeholder';
+import Diagnostics from './Diagnostics';
 import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
 import { getMarketAnalysis } from '../services/geminiService';
 import { cn } from '../lib/utils';
@@ -135,6 +138,26 @@ function OfflinePanel({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DiagnosticsToggle() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="text-[11px] text-gray-500 hover:text-gray-300 underline-offset-2 hover:underline"
+      >
+        {open ? 'Hide diagnostics' : 'Show diagnostics'}
+      </button>
+      {open && (
+        <div className="mt-2">
+          <Diagnostics />
+        </div>
+      )}
     </div>
   );
 }
@@ -474,12 +497,65 @@ export default function Dashboard() {
 
         <main className="flex-1 overflow-y-auto p-3 sm:p-5 space-y-4">
           {allFailed ? (
-            <OfflinePanel
-              kind={statsErr?.label || 'Network error'}
-              httpStatus={statsErr?.httpStatus ?? 0}
-              lastSeen={lastSuccessAt}
-              onRetry={fetchData}
-              retrying={isRefreshing}
+            <>
+              <OfflinePanel
+                kind={statsErr?.label || 'Network error'}
+                httpStatus={statsErr?.httpStatus ?? 0}
+                lastSeen={lastSuccessAt}
+                onRetry={fetchData}
+                retrying={isRefreshing}
+              />
+              <Diagnostics />
+            </>
+          ) : activeNav === 'journals' ? (
+            <JournalsTab />
+          ) : activeNav === 'smc' ? (
+            <Placeholder
+              title="SMC Concepts"
+              description="Smart Money Concept signals visualised by pattern. Coming next."
+              bullets={[
+                'Aggregated by FVG_REVERSAL, OB, BOS, MSS, CHOCH, etc.',
+                'Confidence histogram and recent triggers per concept',
+                'Driven by /api/bot/signals once the bot populates pattern + confidence (ict-trading-bot#556)',
+              ]}
+            />
+          ) : activeNav === 'liquidity' ? (
+            <Placeholder
+              title="Liquidity Maps"
+              description="Liquidity pool map and recent sweeps. Coming after SMC Concepts."
+              bullets={[
+                'Equal highs / equal lows zones',
+                'Recent sweeps annotated on price',
+                'Needs a new bot endpoint for liquidity zones (not yet exposed)',
+              ]}
+            />
+          ) : activeNav === 'time-price' ? (
+            <Placeholder
+              title="Time & Price"
+              description="Killzones, session overlays, and time-based signal density."
+              bullets={[
+                'London / NY / Asia killzone shading',
+                'Power-of-3 (accumulation / manipulation / distribution) phases',
+                'Builds on the same /api/bot/signals stream',
+              ]}
+            />
+          ) : activeNav === 'performance' ? (
+            <Placeholder
+              title="Performance"
+              description="P&L curve, drawdown, win rate by strategy."
+              bullets={[
+                'Daily P&L history from /api/pnl/history?days=N (JWT-gated, needs login flow)',
+                'Per-strategy breakdown once Journals data is wired (ict-trading-bot#557)',
+              ]}
+            />
+          ) : activeNav === 'settings' ? (
+            <Placeholder
+              title="Settings"
+              description="Read-only view of bot configuration."
+              bullets={[
+                'Polled config (intervals, accounts, risk caps) — needs /api/bot/config endpoint',
+                'Mutating controls (halt, start, restart) blocked on bot HTTP halt endpoint',
+              ]}
             />
           ) : (
             <>
@@ -497,6 +573,8 @@ export default function Dashboard() {
               </div>
 
               <LogViewer logs={logs} error={logs ? null : logsErr} />
+
+              <DiagnosticsToggle />
             </>
           )}
         </main>

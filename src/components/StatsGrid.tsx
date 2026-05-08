@@ -32,6 +32,49 @@ function StatCard({
   );
 }
 
+function fmtPct(v: number | null): string {
+  return v === null ? '—' : `${v.toFixed(0)}%`;
+}
+
+function InfrastructureCard({
+  vm,
+}: {
+  vm: { cpu: number | null; memory: number | null; disk: number | null };
+}) {
+  // Two failure modes converge on "no telemetry":
+  //   1. Per-field null — bot's psutil sample failed (ict-trading-bot#556 fixed contract).
+  //   2. All-three-zero — older bot versions emitted (0, 0, 0) before #556 landed.
+  // Both render as "—" rather than a misleading "0% / 0% / 0%" card. A real
+  // zero measurement on any single field will still render as "0%".
+  const allMissing =
+    (vm.cpu === null || vm.cpu === 0) &&
+    (vm.memory === null || vm.memory === 0) &&
+    (vm.disk === null || vm.disk === 0);
+  return (
+    <div className="metric-card">
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
+          Infrastructure
+        </span>
+        <Cpu className="text-gray-600" size={16} />
+      </div>
+      {allMissing ? (
+        <>
+          <p className="text-2xl font-semibold text-gray-500">—</p>
+          <p className="text-xs text-gray-500 mt-1">No VM telemetry yet</p>
+        </>
+      ) : (
+        <>
+          <p className="text-2xl font-semibold text-gray-100">{fmtPct(vm.cpu)}</p>
+          <p className="text-xs text-gray-500 mt-1">
+            RAM: {fmtPct(vm.memory)} &nbsp;Disk: {fmtPct(vm.disk)}
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 export default function StatsGrid({ stats, error }: StatsGridProps) {
   if (!stats) {
     if (error) {
@@ -88,44 +131,6 @@ export default function StatsGrid({ stats, error }: StatsGridProps) {
         valueClass={statusClass}
       />
       <InfrastructureCard vm={stats.vmHealth} />
-    </div>
-  );
-}
-
-function fmtPct(v: number | null): string {
-  return v === null ? '—' : `${v.toFixed(0)}%`;
-}
-
-function InfrastructureCard({
-  vm,
-}: {
-  vm: { cpu: number | null; memory: number | null; disk: number | null };
-}) {
-  // Per-field null = "psutil sample failed on the bot"
-  // (ict-trading-bot#556). Treating null distinctly from a real 0
-  // measurement is the whole point of the null-on-missing contract.
-  const allMissing = vm.cpu === null && vm.memory === null && vm.disk === null;
-  return (
-    <div className="metric-card">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs text-gray-400 font-medium uppercase tracking-wider">
-          Infrastructure
-        </span>
-        <Cpu className="text-gray-600" size={16} />
-      </div>
-      {allMissing ? (
-        <>
-          <p className="text-2xl font-semibold text-gray-500">—</p>
-          <p className="text-xs text-gray-500 mt-1">No VM telemetry yet</p>
-        </>
-      ) : (
-        <>
-          <p className="text-2xl font-semibold text-gray-100">{fmtPct(vm.cpu)}</p>
-          <p className="text-xs text-gray-500 mt-1">
-            RAM: {fmtPct(vm.memory)} &nbsp;Disk: {fmtPct(vm.disk)}
-          </p>
-        </>
-      )}
     </div>
   );
 }

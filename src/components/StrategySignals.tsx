@@ -16,13 +16,12 @@ interface PatternRow {
 
 function aggregateByPattern(signals: Signal[]): PatternRow[] {
   const byPattern = new Map<string, PatternRow>();
-  // signals returned newest-last in the API; iterate forward so the last
   // entry per pattern sticks as "most recent". Skip rows with null/empty
-  // pattern — the bot writer occasionally drops the field
-  // (ict-trading-bot#556) and aggregating them under "unknown" produces
-  // a misleading "unknown — conf 0.00" row.
+  // pattern, and also literal "unknown" — the bot writer occasionally drops
+  // the field (ict-trading-bot#556) and aggregating them under "unknown"
+  // produces a misleading "unknown — conf 0.00" row.
   for (const s of signals) {
-    if (!s.pattern) continue;
+    if (!s.pattern || s.pattern.toLowerCase() === 'unknown') continue;
     const cur = byPattern.get(s.pattern);
     if (cur) {
       cur.count += 1;
@@ -40,6 +39,20 @@ function aggregateByPattern(signals: Signal[]): PatternRow[] {
     }
   }
   return Array.from(byPattern.values()).sort((a, b) => b.count - a.count);
+}
+
+function aggregateBySymbol(signals: Signal[]): { symbol: string; count: number; lastSide: string }[] {
+  const bySym = new Map<string, { symbol: string; count: number; lastSide: string }>();
+  for (const s of signals) {
+    const cur = bySym.get(s.symbol);
+    if (cur) {
+      cur.count += 1;
+      cur.lastSide = s.side;
+    } else {
+      bySym.set(s.symbol, { symbol: s.symbol, count: 1, lastSide: s.side });
+    }
+  }
+  return Array.from(bySym.values()).sort((a, b) => b.count - a.count);
 }
 
 function isShort(side: string) {
@@ -85,6 +98,48 @@ export default function StrategySignals({ signals, error }: StrategySignalsProps
   }
 
   const patterns = aggregateByPattern(signals);
+
+  // Bot may emit signals with empty `pattern` field (ict-trading-bot#556).
+  // If every signal has been filtered out, fall back to a per-symbol
+  // summary instead of rendering an empty card or a misleading "unknown" row.
+  if (patterns.length === 0) {
+    const bySym = aggregateBySymbol(signals);
+    return (
+      <div className="metric-card">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-200">Active ICT Strategies</h3>
+          <span
+            className="text-[10px] text-amber-300/90"
+            title="Bot signals are missing a `pattern` field (ict-trading-bot#556) — falling back to per-symbol summary."
+          >
+            no pattern data
+          </span>
+        </div>
+        <div className="space-y-2 max-h-56 overflow-y-auto">
+          {bySym.map((row) => (
+            <div
+              key={row.symbol}
+              className="flex items-center justify-between py-2 border-b border-gray-800 last:border-0"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  className={cn(
+                    'w-1.5 h-1.5 rounded-full shrink-0',
+                    isShort(row.lastSide) ? 'bg-red-400' : 'bg-emerald-400',
+                  )}
+                />
+                <p className="text-sm text-gray-200 truncate">{row.symbol}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-sm font-mono font-semibold text-gray-300">{row.count}</p>
+                <p className="text-[10px] text-gray-500">signals</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="metric-card">
