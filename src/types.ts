@@ -29,3 +29,29 @@ export interface LogEntry {
   level: 'info' | 'warn' | 'error' | 'trade';
   message: string;
 }
+
+export interface Position {
+  id: string;
+  account: string;
+  symbol: string;
+  side: 'buy' | 'sell' | 'long' | 'short' | string;
+  qty: number;
+  entryPrice: number;
+  unrealizedPnl: number;
+  openedAt: string;
+}
+
+export interface Signal {
+  id: string;
+  timestamp: string;
+  symbol: string;
+  side: 'buy' | 'sell' | 'long' | 'short' | string;
+  pattern: string;
+  confidence: number;
+  price: number;
+}
+
+export interface EquityPoint {
+  time: string;
+  equity: number;
+}
