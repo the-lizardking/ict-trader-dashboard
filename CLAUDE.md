@@ -65,19 +65,22 @@ Local dev does NOT use the Vercel rewrite. Either run the bot locally on `:8001`
 ```
 src/
   components/
-    Dashboard.tsx     — main layout, polling loop, header, sidebar, modals, connection-error banner
-    EquityChart.tsx   — Recharts area chart (mock data; wire live data later)
-    StatsGrid.tsx     — 4 metric cards (PnL, orders, status, infra)
-    LogViewer.tsx     — terminal-style scrollable log feed
+    Dashboard.tsx        — main layout, polling loop, header, sidebar, modals, connection-error banner
+    EquityChart.tsx      — Recharts area chart driven by a rolling totalPnL buffer (data prop)
+    StatsGrid.tsx        — 4 metric cards (PnL, orders, status, infra)
+    LogViewer.tsx        — terminal-style scrollable log feed
+    PositionsPanel.tsx   — open trades from /api/bot/positions
+    StrategySignals.tsx  — recent signals aggregated by pattern from /api/bot/signals
   services/
-    geminiService.ts  — Gemini AI market analysis call
+    api.ts               — typed fetchers (getStats/getLogs/getPositions/getSignals/getDashboardSnapshot) + BotApiError
+    geminiService.ts     — Gemini AI market analysis call
   lib/
-    utils.ts          — cn() helper (clsx + tailwind-merge)
-  types.ts            — Trade, BotStats, LogEntry TypeScript interfaces
-  index.css           — Tailwind v4 imports + custom component classes
-  App.tsx             — root component, renders <Dashboard />
-  main.tsx            — React 19 createRoot entry point
-vercel.json           — API rewrite + SPA rewrite (order matters)
+    utils.ts             — cn() helper (clsx + tailwind-merge)
+  types.ts               — Trade, BotStats, LogEntry, Position, Signal, EquityPoint TypeScript interfaces
+  index.css              — Tailwind v4 imports + custom component classes
+  App.tsx                — root component, renders <Dashboard />
+  main.tsx               — React 19 createRoot entry point
+vercel.json              — API rewrite + SPA rewrite (order matters)
 ```
 
 ## API Contract (from ict-trading-bot)
@@ -100,15 +103,57 @@ vercel.json           — API rewrite + SPA rewrite (order matters)
 [
   {
     "id": "abc123",
-    "timestamp": "2025-05-07T10:00:00Z",
+    "timestamp": "2026-05-08T10:00:00Z",
     "level": "trade",
     "message": "BTC long opened at 62000"
   }
 ]
 ```
 
+### `GET /api/bot/positions` → `Position[]`
+```json
+[
+  {
+    "id": "42",
+    "account": "bybit_2",
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "qty": 0.001,
+    "entryPrice": 62000,
+    "unrealizedPnl": 12.45,
+    "openedAt": "2026-05-08T10:00:00Z"
+  }
+]
+```
+
+### `GET /api/bot/signals` → `Signal[]`
+```json
+[
+  {
+    "id": "abc123",
+    "timestamp": "2026-05-08T10:00:00Z",
+    "symbol": "BTCUSDT",
+    "side": "buy",
+    "pattern": "FVG_REVERSAL",
+    "confidence": 0.82,
+    "price": 62000
+  }
+]
+```
+
+## Equity history note
+
+The bot exposes `GET /api/pnl/history?days=N` for true daily P&L history,
+but it's JWT-gated (`require_session`) and the SPA does not yet have a
+login flow. Until that lands, `EquityChart` consumes a session-only
+client-side rolling buffer of `stats.totalPnL` collected each poll tick
+(60 ticks × 10s = 10 minutes of history). The buffer resets on tab
+refresh — moving to localStorage, or wiring login + `/api/pnl/history`,
+is a follow-up.
+
 ## Notes
 - `GEMINI_API_KEY` is baked into the JS bundle at build time via Vite `define` — acceptable for a private internal tool
 - Tailwind v4 does NOT use `tailwind.config.js`; all theme tokens live in `@theme {}` inside `index.css`
 - `vercel.json` SPA rewrite is required for any client-side routing to work after a hard refresh
 - `VITE_BOT_API_URL` must NOT have a trailing slash if you set it (default empty triggers the same-origin rewrite path)
+- The `FORCED STOP` button in the header is currently visually disabled — the bot doesn't expose an HTTP halt endpoint yet (`/halt` is only on the trader Telegram bot today). Wire to a new `POST /api/bot/halt` in a follow-up.
