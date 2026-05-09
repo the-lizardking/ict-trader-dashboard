@@ -70,3 +70,21 @@ export interface EquityPoint {
   time: string;
   equity: number;
 }
+
+/**
+ * One row from `/api/pnl/history?days=N`. The bot returns one entry per
+ * UTC trading day in the requested window (oldest → newest).
+ *
+ * `cumulativePnl` is "running total at end-of-day" if the bot supplies it;
+ * otherwise the dashboard derives it client-side. `trades / wins / losses`
+ * are optional — older bot builds may not populate them, in which case the
+ * win-loss ratio in the header strip falls back to "—".
+ */
+export interface PnlHistoryPoint {
+  date: string;
+  pnl: number;
+  cumulativePnl?: number | null;
+  trades?: number | null;
+  wins?: number | null;
+  losses?: number | null;
+}

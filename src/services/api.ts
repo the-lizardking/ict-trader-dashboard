@@ -1,4 +1,4 @@
-import { BotStats, ClosedTrade, LogEntry, Position, Signal } from '../types';
+import { BotStats, ClosedTrade, LogEntry, PnlHistoryPoint, Position, Signal } from '../types';
 
 const BOT_API = import.meta.env.VITE_BOT_API_URL ?? '';
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -119,6 +119,16 @@ export const getStats = (): Promise<BotStats> => fetchJson<BotStats>('/api/bot/s
 export const getLogs = (): Promise<LogEntry[]> => fetchJson<LogEntry[]>('/api/bot/logs');
 export const getPositions = (): Promise<Position[]> => fetchJson<Position[]>('/api/bot/positions');
 export const getSignals = (): Promise<Signal[]> => fetchJson<Signal[]>('/api/bot/signals');
+
+/**
+ * Daily P&L history for the Performance tab. The bot endpoint was JWT-gated
+ * in older builds; S-063 dropped the gate on the read-only path so the SPA
+ * can hit it without a session. If the gate is still in place (or the bot is
+ * rolling), the call surfaces as a 401 / network error and PerformanceTab
+ * falls back to the localStorage equity buffer.
+ */
+export const getPnlHistory = (days: number): Promise<PnlHistoryPoint[]> =>
+  fetchJson<PnlHistoryPoint[]>(`/api/pnl/history?days=${days}`);
 
 /**
  * Closed trades for the Journals tab. The bot endpoint is tracked on
