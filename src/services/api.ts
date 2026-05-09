@@ -1,4 +1,13 @@
-import { BotStats, ClosedTrade, LogEntry, PnlHistoryPoint, Position, Signal } from '../types';
+import {
+  BotConfigResponse,
+  BotStats,
+  ClosedTrade,
+  LiquidityResponse,
+  LogEntry,
+  PnlHistoryPoint,
+  Position,
+  Signal,
+} from '../types';
 
 const BOT_API = import.meta.env.VITE_BOT_API_URL ?? '';
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -129,6 +138,29 @@ export const getSignals = (): Promise<Signal[]> => fetchJson<Signal[]>('/api/bot
  */
 export const getPnlHistory = (days: number): Promise<PnlHistoryPoint[]> =>
   fetchJson<PnlHistoryPoint[]>(`/api/pnl/history?days=${days}`);
+
+/**
+ * Per-symbol liquidity zones for the Liquidity Maps tab (S-064).
+ * The bot endpoint reads runtime_logs/liquidity_state.json which the
+ * pipeline writes per tick. Empty / missing file → 200 with empty
+ * arrays, so the consumer doesn't have to special-case "no data".
+ */
+export const getLiquidity = (
+  symbol?: string,
+  limit = 25,
+): Promise<LiquidityResponse> => {
+  const params = new URLSearchParams();
+  if (symbol) params.set('symbol', symbol);
+  params.set('limit', String(limit));
+  return fetchJson<LiquidityResponse>(`/api/bot/liquidity?${params.toString()}`);
+};
+
+/**
+ * Read-only effective config view for the Settings tab (S-064).
+ * The bot endpoint redacts secrets server-side.
+ */
+export const getBotConfig = (): Promise<BotConfigResponse> =>
+  fetchJson<BotConfigResponse>('/api/bot/config');
 
 /**
  * Closed trades for the Journals tab. The bot endpoint is tracked on

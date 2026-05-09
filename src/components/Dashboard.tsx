@@ -26,6 +26,8 @@ import JournalsTab from './JournalsTab';
 import ModelsTab from './ModelsTab';
 import TimePriceTab from './TimePriceTab';
 import PerformanceTab from './PerformanceTab';
+import LiquidityMapsTab from './LiquidityMapsTab';
+import SettingsTab from './SettingsTab';
 import Placeholder from './Placeholder';
 import Diagnostics from './Diagnostics';
 import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
@@ -559,28 +561,13 @@ export default function Dashboard() {
           ) : activeNav === 'models' ? (
             <ModelsTab signals={signals} positions={positions} />
           ) : activeNav === 'liquidity' ? (
-            <Placeholder
-              title="Liquidity Maps"
-              description="Liquidity pool map and recent sweeps. Coming in S-064."
-              bullets={[
-                'Equal highs / equal lows zones',
-                'Recent sweeps annotated on price',
-                'Needs a new bot endpoint for liquidity zones (not yet exposed)',
-              ]}
-            />
+            <LiquidityMapsTab />
           ) : activeNav === 'time-price' ? (
             <TimePriceTab signals={signals} />
           ) : activeNav === 'performance' ? (
             <PerformanceTab fallbackEquity={equityHistory} />
           ) : activeNav === 'settings' ? (
-            <Placeholder
-              title="Settings"
-              description="Read-only view of bot configuration."
-              bullets={[
-                'Polled config (intervals, accounts, risk caps) — needs /api/bot/config endpoint',
-                'Mutating controls (halt, start, restart) blocked on bot HTTP halt endpoint',
-              ]}
-            />
+            <SettingsTab />
           ) : (
             <>
               {anyError && (
