@@ -25,6 +25,7 @@ import StrategySignals from './StrategySignals';
 import JournalsTab from './JournalsTab';
 import ModelsTab from './ModelsTab';
 import TimePriceTab from './TimePriceTab';
+import PerformanceTab from './PerformanceTab';
 import Placeholder from './Placeholder';
 import Diagnostics from './Diagnostics';
 import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
@@ -37,6 +38,41 @@ const POLL_INTERVAL_MS = 10_000;
 // interval. Capped at the regular cadence.
 const POLL_RETRY_MS = 3_000;
 const EQUITY_BUFFER_MAX = 60;
+// localStorage key for the rolling equity buffer. Bumped if the entry
+// shape changes so old payloads are ignored on rehydrate.
+const EQUITY_STORAGE_KEY = 'ict-equity-buffer-v1';
+
+function loadEquityBuffer(): EquityPoint[] {
+  try {
+    const raw = localStorage.getItem(EQUITY_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const out: EquityPoint[] = [];
+    for (const p of parsed) {
+      if (
+        p &&
+        typeof p === 'object' &&
+        typeof p.time === 'string' &&
+        typeof p.equity === 'number' &&
+        Number.isFinite(p.equity)
+      ) {
+        out.push({ time: p.time, equity: p.equity });
+      }
+    }
+    return out.length > EQUITY_BUFFER_MAX ? out.slice(out.length - EQUITY_BUFFER_MAX) : out;
+  } catch {
+    return [];
+  }
+}
+
+function saveEquityBuffer(points: EquityPoint[]): void {
+  try {
+    localStorage.setItem(EQUITY_STORAGE_KEY, JSON.stringify(points));
+  } catch {
+    /* private mode / quota — best effort */
+  }
+}
 
 const NAV_SECTIONS = [
   {
@@ -170,7 +206,7 @@ export default function Dashboard() {
   const [logs, setLogs] = useState<LogEntry[] | null>(null);
   const [positions, setPositions] = useState<Position[] | null>(null);
   const [signals, setSignals] = useState<Signal[] | null>(null);
-  const [equityHistory, setEquityHistory] = useState<EquityPoint[]>([]);
+  const [equityHistory, setEquityHistory] = useState<EquityPoint[]>(() => loadEquityBuffer());
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Per-section error state. null = healthy on last poll.
@@ -193,7 +229,11 @@ export default function Dashboard() {
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [desktopNavCollapsed, setDesktopNavCollapsed] = useState(false);
 
-  const lastEquitySampleRef = useRef<number | null>(null);
+  // Seed from the persisted buffer's last entry so we don't push a duplicate
+  // sample on first poll after a refresh when totalPnL hasn't moved yet.
+  const lastEquitySampleRef = useRef<number | null>(
+    equityHistory.length > 0 ? equityHistory[equityHistory.length - 1].equity : null,
+  );
   const lastFailedRef = useRef<boolean>(false);
 
   const fetchData = useCallback(async () => {
@@ -223,8 +263,13 @@ export default function Dashboard() {
       if (totalPnL !== undefined && lastEquitySampleRef.current !== totalPnL) {
         lastEquitySampleRef.current = totalPnL;
         setEquityHistory((prev) => {
-          const next = [...prev, { time: formatTime(new Date()), equity: totalPnL }];
-          return next.length > EQUITY_BUFFER_MAX ? next.slice(next.length - EQUITY_BUFFER_MAX) : next;
+          const appended = [...prev, { time: formatTime(new Date()), equity: totalPnL }];
+          const next =
+            appended.length > EQUITY_BUFFER_MAX
+              ? appended.slice(appended.length - EQUITY_BUFFER_MAX)
+              : appended;
+          saveEquityBuffer(next);
+          return next;
         });
       }
     } catch (error) {
@@ -526,14 +571,7 @@ export default function Dashboard() {
           ) : activeNav === 'time-price' ? (
             <TimePriceTab signals={signals} />
           ) : activeNav === 'performance' ? (
-            <Placeholder
-              title="Performance"
-              description="P&L curve, drawdown, win rate by strategy."
-              bullets={[
-                'Daily P&L history from /api/pnl/history?days=N (JWT-gated, needs login flow)',
-                'Per-strategy breakdown once Journals data is wired (ict-trading-bot#557)',
-              ]}
-            />
+            <PerformanceTab fallbackEquity={equityHistory} />
           ) : activeNav === 'settings' ? (
             <Placeholder
               title="Settings"
