@@ -1,12 +1,20 @@
-export interface Trade {
+export interface ClosedTrade {
   id: string;
+  account: string;
   symbol: string;
-  type: 'buy' | 'sell';
+  side: 'buy' | 'sell' | 'long' | 'short' | string;
+  pattern?: string | null;
+  qty: number;
   entryPrice: number;
-  currentPrice: number;
-  pnl: number;
-  status: 'open' | 'closed';
-  timestamp: string;
+  exitPrice: number;
+  realizedPnl: number;
+  realizedPnlPct?: number | null;
+  openedAt: string;
+  closedAt: string;
+  closeReason?: 'tp' | 'sl' | 'manual' | 'reconciler' | 'other' | string | null;
+  /** When true, the row was derived client-side from /api/bot/logs because the
+   *  bot has no /api/bot/trades/closed endpoint yet. Best-effort, missing fields. */
+  derivedFromLogs?: boolean;
 }
 
 export interface BotStats {
