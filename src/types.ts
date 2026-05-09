@@ -16,10 +16,13 @@ export interface BotStats {
   winRate: number;
   status: 'running' | 'paused' | 'stopped' | 'error';
   datasource: 'live' | 'mock';
+  // Per-field nullable: bot returns null for any reading whose
+  // psutil sample failed (ict-trading-bot#556). Render `—` for null,
+  // a real `0%` for an actual zero measurement.
   vmHealth: {
-    cpu: number;
-    memory: number;
-    disk: number;
+    cpu: number | null;
+    memory: number | null;
+    disk: number | null;
   };
 }
 
@@ -46,9 +49,13 @@ export interface Signal {
   timestamp: string;
   symbol: string;
   side: 'buy' | 'sell' | 'long' | 'short' | string;
-  pattern: string;
-  confidence: number;
-  price: number;
+  // pattern / confidence / price are null when the bot writer didn't
+  // populate them on the originating audit row (ict-trading-bot#556).
+  // Renderers must skip rows with null pattern rather than fall through
+  // to "unknown".
+  pattern: string | null;
+  confidence: number | null;
+  price: number | null;
 }
 
 export interface EquityPoint {

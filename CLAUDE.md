@@ -98,6 +98,10 @@ vercel.json              — API rewrite + SPA rewrite (order matters)
 }
 ```
 
+`vmHealth.cpu | memory | disk` are **nullable**. `null` per field means
+the bot's psutil sample failed (ict-trading-bot#556) — render `—`,
+not `0%`. A real `0` reading is a measurement and renders as `0%`.
+
 ### `GET /api/bot/logs` → `LogEntry[]`
 ```json
 [
@@ -140,6 +144,11 @@ vercel.json              — API rewrite + SPA rewrite (order matters)
   }
 ]
 ```
+
+`pattern | confidence | price` are **nullable**. The bot returns
+`null` when the originating audit row was written without that
+field (ict-trading-bot#556). Renderers must skip rows with null
+`pattern` rather than aggregate them under "unknown".
 
 ## Equity history note
 
