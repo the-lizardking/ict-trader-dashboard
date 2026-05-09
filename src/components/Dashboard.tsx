@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard,
-  TrendingUp,
+  Layers,
   Droplets,
   Clock,
   BookOpen,
@@ -23,6 +23,8 @@ import LogViewer from './LogViewer';
 import PositionsPanel from './PositionsPanel';
 import StrategySignals from './StrategySignals';
 import JournalsTab from './JournalsTab';
+import ModelsTab from './ModelsTab';
+import TimePriceTab from './TimePriceTab';
 import Placeholder from './Placeholder';
 import Diagnostics from './Diagnostics';
 import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
@@ -41,7 +43,7 @@ const NAV_SECTIONS = [
     label: 'Market Analysis',
     items: [
       { id: 'overview', label: 'Overview', icon: LayoutDashboard },
-      { id: 'smc', label: 'SMC Concepts', icon: TrendingUp },
+      { id: 'models', label: 'Models', icon: Layers },
       { id: 'liquidity', label: 'Liquidity Maps', icon: Droplets },
       { id: 'time-price', label: 'Time & Price', icon: Clock },
     ],
@@ -509,20 +511,12 @@ export default function Dashboard() {
             </>
           ) : activeNav === 'journals' ? (
             <JournalsTab />
-          ) : activeNav === 'smc' ? (
-            <Placeholder
-              title="SMC Concepts"
-              description="Smart Money Concept signals visualised by pattern. Coming next."
-              bullets={[
-                'Aggregated by FVG_REVERSAL, OB, BOS, MSS, CHOCH, etc.',
-                'Confidence histogram and recent triggers per concept',
-                'Driven by /api/bot/signals once the bot populates pattern + confidence (ict-trading-bot#556)',
-              ]}
-            />
+          ) : activeNav === 'models' ? (
+            <ModelsTab signals={signals} positions={positions} />
           ) : activeNav === 'liquidity' ? (
             <Placeholder
               title="Liquidity Maps"
-              description="Liquidity pool map and recent sweeps. Coming after SMC Concepts."
+              description="Liquidity pool map and recent sweeps. Coming in S-064."
               bullets={[
                 'Equal highs / equal lows zones',
                 'Recent sweeps annotated on price',
@@ -530,15 +524,7 @@ export default function Dashboard() {
               ]}
             />
           ) : activeNav === 'time-price' ? (
-            <Placeholder
-              title="Time & Price"
-              description="Killzones, session overlays, and time-based signal density."
-              bullets={[
-                'London / NY / Asia killzone shading',
-                'Power-of-3 (accumulation / manipulation / distribution) phases',
-                'Builds on the same /api/bot/signals stream',
-              ]}
-            />
+            <TimePriceTab signals={signals} />
           ) : activeNav === 'performance' ? (
             <Placeholder
               title="Performance"
