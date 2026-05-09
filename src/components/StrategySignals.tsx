@@ -10,15 +10,19 @@ interface PatternRow {
   pattern: string;
   count: number;
   lastSide: string;
-  lastConfidence: number;
+  lastConfidence: number | null;
   lastTs: string;
 }
 
 function aggregateByPattern(signals: Signal[]): PatternRow[] {
   const byPattern = new Map<string, PatternRow>();
   // signals returned newest-last in the API; iterate forward so the last
-  // entry per pattern sticks as "most recent".
+  // entry per pattern sticks as "most recent". Skip rows with null/empty
+  // pattern — the bot writer occasionally drops the field
+  // (ict-trading-bot#556) and aggregating them under "unknown" produces
+  // a misleading "unknown — conf 0.00" row.
   for (const s of signals) {
+    if (!s.pattern) continue;
     const cur = byPattern.get(s.pattern);
     if (cur) {
       cur.count += 1;
@@ -106,7 +110,8 @@ export default function StrategySignals({ signals, error }: StrategySignalsProps
                 <div className="min-w-0">
                   <p className="text-sm text-gray-200 truncate">{p.pattern}</p>
                   <p className="text-[10px] text-gray-500">
-                    last: {short ? 'SHORT' : 'LONG'} · conf {p.lastConfidence.toFixed(2)}
+                    last: {short ? 'SHORT' : 'LONG'} · conf{' '}
+                    {p.lastConfidence === null ? '—' : p.lastConfidence.toFixed(2)}
                   </p>
                 </div>
               </div>
