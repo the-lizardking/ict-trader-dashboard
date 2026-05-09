@@ -88,3 +88,77 @@ export interface PnlHistoryPoint {
   wins?: number | null;
   losses?: number | null;
 }
+
+/**
+ * One liquidity zone from /api/bot/liquidity (S-064). The bot serialises
+ * pools the strategy layer detects into a wire-stable shape: side
+ * (buy = equal highs / BSL; sell = equal lows / SSL), the level price,
+ * how many times it was touched, the first / last touch ISO timestamps,
+ * and whether price has since swept through the level (with the sweep
+ * timestamp).
+ */
+export interface LiquidityZone {
+  side: 'buy' | 'sell';
+  price: number;
+  touches: number;
+  first_touch: string | null;
+  last_touch: string | null;
+  swept: boolean;
+  sweep_time: string | null;
+}
+
+export interface LiquiditySweep {
+  side: 'buy' | 'sell';
+  price: number;
+  swept_at: string;
+}
+
+/**
+ * Response shape for /api/bot/liquidity?symbol=X (S-064). Fields are
+ * always present even on the empty path so the dashboard doesn't have
+ * to branch on missing keys.
+ */
+export interface LiquidityResponse {
+  symbol: string;
+  as_of: string | null;
+  equal_highs: LiquidityZone[];
+  equal_lows: LiquidityZone[];
+  recent_sweeps: LiquiditySweep[];
+  available_symbols?: string[];
+}
+
+/**
+ * Subset of /api/bot/config (S-064) the Settings tab consumes. Field
+ * names follow the bot's wire shape — re-using server names instead of
+ * camelCasing to keep the dashboard a thin viewer.
+ */
+export interface BotAccount {
+  id: string;
+  type?: string;
+  exchange?: string;
+  market_type?: string;
+  yaml_mode?: string;
+  strategies?: string[];
+  enabled?: boolean;
+  risk?: Record<string, number | string>;
+}
+
+export interface BotStrategyConfig {
+  enabled?: boolean;
+  risk_pct?: number;
+  timeframe?: string;
+  symbols?: string[];
+  // Strategy params are open-ended; allow any safe scalar / list.
+  [key: string]: unknown;
+}
+
+export interface BotConfigResponse {
+  as_of: string;
+  trading_mode: {
+    halted: boolean;
+    live_per_account: Record<string, boolean>;
+    note: string;
+  };
+  accounts: BotAccount[];
+  strategies: Record<string, BotStrategyConfig>;
+}
