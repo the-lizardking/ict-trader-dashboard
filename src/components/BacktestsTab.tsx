@@ -266,12 +266,12 @@ export default function BacktestsTab() {
                     {formatDate(r.endDate)}
                   </td>
                   <td className="px-3 py-2 text-right text-gray-300 font-mono tabular-nums">
-                    {r.totalTrades ?? '—'}
-                    {(r.totalTrades ?? 0) > 0 && (
+                    {r.totalTrades}
+                    {r.totalTrades > 0 && (
                       <div className="text-[10px] text-gray-500 font-sans">
-                        <span className="text-emerald-400">{r.winningTrades ?? '—'}</span>
+                        <span className="text-emerald-400">{r.winningTrades}</span>
                         <span className="text-gray-600"> / </span>
-                        <span className="text-red-400">{r.losingTrades ?? '—'}</span>
+                        <span className="text-red-400">{r.losingTrades}</span>
                       </div>
                     )}
                   </td>
