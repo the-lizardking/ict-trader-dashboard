@@ -15,6 +15,7 @@ import {
   CloudOff,
   Sparkles,
   Menu,
+  Workflow,
   X,
 } from 'lucide-react';
 import { BotStats, LogEntry, Position, Signal, EquityPoint } from '../types';
@@ -37,6 +38,7 @@ const TimePriceTab = lazy(() => import('./TimePriceTab'));
 const PerformanceTab = lazy(() => import('./PerformanceTab'));
 const LiquidityMapsTab = lazy(() => import('./LiquidityMapsTab'));
 const SettingsTab = lazy(() => import('./SettingsTab'));
+const TradeProcessTab = lazy(() => import('./TradeProcessTab'));
 import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
 import { getMarketAnalysis } from '../services/geminiService';
 import { cn } from '../lib/utils';
@@ -91,6 +93,7 @@ const NAV_SECTIONS = [
       { id: 'models', label: 'Models', icon: Layers },
       { id: 'liquidity', label: 'Liquidity Maps', icon: Droplets },
       { id: 'time-price', label: 'Time & Price', icon: Clock },
+      { id: 'trade-process', label: 'Trade Process', icon: Workflow },
     ],
   },
   {
@@ -597,6 +600,10 @@ export default function Dashboard() {
           ) : activeNav === 'time-price' ? (
             <Suspense fallback={<TabLoadingFallback label="Time & Price" />}>
               <TimePriceTab signals={signals} />
+            </Suspense>
+          ) : activeNav === 'trade-process' ? (
+            <Suspense fallback={<TabLoadingFallback label="Trade Process" />}>
+              <TradeProcessTab />
             </Suspense>
           ) : activeNav === 'performance' ? (
             <Suspense fallback={<TabLoadingFallback label="Performance" />}>
