@@ -26,10 +26,12 @@ export interface ClosedTrade {
  * total_pnl_pct, avg_win/loss, largest_win/loss) lives in
  * `trade_journal.db::backtest_results` and can be pulled by `id`.
  *
- * **Wire-shape note:** the bot serialises `id` as a string (matching the
- * `trades_closed` and `positions` endpoints) — not a number. Every
- * count column (`totalTrades` / `winningTrades` / `losingTrades`) is
- * nullable: an aborted backtest can land in the table with NULL counts.
+ * **Wire-shape note:** the bot serialises `id` as a string (matching
+ * the `trades_closed` and `positions` endpoints — see
+ * ict-trading-bot#699). Count columns
+ * (`totalTrades` / `winningTrades` / `losingTrades`) are coerced to
+ * `0` server-side via `_coerce_int(...) or 0` in the bot's
+ * `_row_to_wire` — they are non-nullable on the wire.
  */
 export interface BacktestRun {
   id: string;
@@ -37,9 +39,9 @@ export interface BacktestRun {
   runDate: string | null;
   startDate: string | null;
   endDate: string | null;
-  totalTrades: number | null;
-  winningTrades: number | null;
-  losingTrades: number | null;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
   winRate: number | null;
   profitFactor: number | null;
   expectancy: number | null;
