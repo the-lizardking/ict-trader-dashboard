@@ -163,9 +163,15 @@ export const getBotConfig = (): Promise<BotConfigResponse> =>
   fetchJson<BotConfigResponse>('/api/bot/config');
 
 /**
- * Closed trades for the Journals tab. The bot endpoint is tracked on
- * ict-trading-bot#557 and may not exist yet — when it 404s we fall
- * back to deriving rows from the audit log so the tab still renders.
+ * Closed trades for the Journals tab. The bot endpoint
+ * (`/api/bot/trades/closed`) shipped via ict-trading-bot#557 (closed
+ * 2026-05-09). The 404 fallback below is a deprecated transitional
+ * path — when it fires today, the bot is misconfigured (e.g. the
+ * `ict-web-api` service is down or the deploy is stale) and the
+ * derived rows are misleading rather than helpful. We log a
+ * deprecation warning so a regression in production is observable
+ * via the browser console + Sentry rather than silently rendering
+ * fabricated rows.
  */
 export async function getClosedTrades(limit = 50): Promise<ClosedTrade[]> {
   try {
@@ -175,16 +181,28 @@ export async function getClosedTrades(limit = 50): Promise<ClosedTrade[]> {
       err instanceof BotApiError &&
       (err.httpStatus === 404 || err.kind === 'parse' || err.kind === 'http');
     if (!recoverable) throw err;
-    // Endpoint not deployed yet — derive a best-effort view from logs.
+    // Bot is supposed to expose /api/bot/trades/closed (#557 closed
+    // 2026-05-09). If we end up here, something's wrong upstream; log
+    // a deprecation warning so the regression is observable.
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[deprecated] /api/bot/trades/closed unreachable — falling back to ' +
+      'deriveClosedTradesFromLogs(). This path is best-effort and will be ' +
+      'removed once we confirm the bot endpoint is reachable from production.',
+    );
     const logs = await getLogs();
     return deriveClosedTradesFromLogs(logs, limit);
   }
 }
 
 /**
- * Best-effort parse of trade-level audit log entries into ClosedTrade rows.
- * Only used while the bot doesn't expose /api/bot/trades/closed (#557).
- * Many fields will be missing — UI must handle nulls gracefully.
+ * @deprecated Best-effort parse of trade-level audit log entries into
+ *   ClosedTrade rows. Used only as a transitional fallback while
+ *   `/api/bot/trades/closed` (ict-trading-bot#557) is unreachable;
+ *   when it fires today the bot is misconfigured and the derived
+ *   rows are unreliable (no qty, no entry price, fabricated
+ *   `account: 'unknown'`). Plan: remove once Vercel logs confirm
+ *   the fallback hasn't fired in production for one full week.
  */
 export function deriveClosedTradesFromLogs(logs: LogEntry[], limit = 50): ClosedTrade[] {
   const out: ClosedTrade[] = [];
