@@ -25,16 +25,21 @@ export interface ClosedTrade {
  * The bot returns headline metrics only; the full row (config blob,
  * total_pnl_pct, avg_win/loss, largest_win/loss) lives in
  * `trade_journal.db::backtest_results` and can be pulled by `id`.
+ *
+ * **Wire-shape note:** the bot serialises `id` as a string (matching the
+ * `trades_closed` and `positions` endpoints) — not a number. Every
+ * count column (`totalTrades` / `winningTrades` / `losingTrades`) is
+ * nullable: an aborted backtest can land in the table with NULL counts.
  */
 export interface BacktestRun {
-  id: number;
+  id: string;
   strategy: string | null;
   runDate: string | null;
   startDate: string | null;
   endDate: string | null;
-  totalTrades: number;
-  winningTrades: number;
-  losingTrades: number;
+  totalTrades: number | null;
+  winningTrades: number | null;
+  losingTrades: number | null;
   winRate: number | null;
   profitFactor: number | null;
   expectancy: number | null;

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Activity,
   ChevronDown,
@@ -7,7 +7,8 @@ import {
   Layers,
   X,
 } from 'lucide-react';
-import { Position, Signal } from '../types';
+import { ClosedTrade, Position, Signal } from '../types';
+import { getClosedTrades } from '../services/api';
 import { cn } from '../lib/utils';
 
 interface ModelsTabProps {
@@ -32,6 +33,12 @@ interface PatternRow {
 // seen something this trading half-hour.
 const ACTIVE_MS = 30 * 60 * 1000; // 30 min
 const IDLE_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+// Win-rate window for the per-pattern badge. 7 days matches the prior
+// `7d win rate` placeholder this component shipped with.
+const WIN_RATE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+const CLOSED_TRADES_POLL_MS = 60_000;
+const CLOSED_TRADES_LIMIT = 200;
 
 function statusOf(lastTs: number, now: number): StatusKey {
   const age = now - lastTs;
@@ -143,10 +150,44 @@ export default function ModelsTab({ signals, positions }: ModelsTabProps) {
   const [symbolFilter, setSymbolFilter] = useState<string | null>(null);
   const [patternFilter, setPatternFilter] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [closedTrades, setClosedTrades] = useState<ClosedTrade[] | null>(null);
 
   // Pin "now" once per render so all status pills + relative timestamps
   // agree with each other for that paint.
   const now = Date.now();
+
+  // Closed-trades fetch: lazy-loaded when the Models tab mounts; polled
+  // at a slower cadence than the dashboard's 10s tick because per-pattern
+  // win rate barely moves by minute. ict-trading-bot#557 + S-067 fixes
+  // mean this endpoint is reliable as of 2026-05-09.
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    let cancelled = false;
+    const fetchOnce = async () => {
+      try {
+        const data = await getClosedTrades(CLOSED_TRADES_LIMIT);
+        if (!cancelled && !cancelledRef.current) setClosedTrades(data);
+      } catch {
+        // Best-effort — a fetch failure leaves the prior `closedTrades`
+        // in place (or null on first mount). The badge falls back to '—'.
+      }
+    };
+    fetchOnce();
+    const id = setInterval(fetchOnce, CLOSED_TRADES_POLL_MS);
+    return () => {
+      cancelled = true;
+      cancelledRef.current = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Per-pattern win-rate map, keyed by pattern name. Computed once per
+  // closedTrades change and reused across every PatternCard.
+  const winRateByPattern = useMemo(
+    () => computeWinRateByPattern(closedTrades, now),
+    [closedTrades, now],
+  );
 
   const list = signals ?? [];
   const rows = useMemo(() => aggregatePatterns(list), [list]);
@@ -234,7 +275,12 @@ export default function ModelsTab({ signals, positions }: ModelsTabProps) {
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {rows.map((row) => (
-              <PatternCard key={row.pattern} row={row} now={now} />
+              <PatternCard
+                key={row.pattern}
+                row={row}
+                now={now}
+                winRate={winRateByPattern.get(row.pattern) ?? null}
+              />
             ))}
           </div>
         )}
@@ -346,7 +392,20 @@ function Header({
   );
 }
 
-function PatternCard({ row, now }: { row: PatternRow; now: number }) {
+interface PatternWinRate {
+  rate: number;        // 0..1
+  closedCount: number; // sample size in window
+}
+
+function PatternCard({
+  row,
+  now,
+  winRate,
+}: {
+  row: PatternRow;
+  now: number;
+  winRate: PatternWinRate | null;
+}) {
   const status = statusOf(row.lastTs, now);
   const sty = STATUS_STYLE[status];
   return (
@@ -387,7 +446,7 @@ function PatternCard({ row, now }: { row: PatternRow; now: number }) {
       </p>
 
       <div className="mt-2 pt-2 border-t border-gray-800/60 grid grid-cols-2 gap-2 text-[10px]">
-        <WinRateBadge />
+        <WinRateBadge winRate={winRate} />
         <div className="text-right">
           <span className="text-gray-500">avg conf </span>
           <span className="text-gray-300 font-mono tabular-nums">
@@ -408,17 +467,77 @@ function avgConf(signals: Signal[]): string {
   return (sum / known.length).toFixed(2);
 }
 
-function WinRateBadge() {
-  // Win rate per pattern requires the closed-trades endpoint
-  // (ict-trading-bot#557) so we can attribute realised PnL back to the
-  // signal that opened the trade. Render an empty-state placeholder until
-  // that lands rather than fabricating a number from the audit log.
+function WinRateBadge({ winRate }: { winRate: PatternWinRate | null }) {
+  // Win rate per pattern is computed from /api/bot/trades/closed
+  // (ict-trading-bot#557 shipped 2026-05-09). We attribute each closed
+  // trade back to the pattern of the signal that opened it (the trade
+  // row's `strategy_name` which the writer copies from the signal).
+  // Window: trailing 7 days. `null` means we have no closed trades for
+  // this pattern in the window — render '—' rather than 0% (which
+  // would falsely imply 0 wins out of 0).
+  if (winRate === null || winRate.closedCount === 0) {
+    return (
+      <div
+        className="text-left"
+        title="No closed trades for this pattern in the last 7 days"
+      >
+        <span className="text-gray-500">7d win rate </span>
+        <span className="text-gray-600">—</span>
+      </div>
+    );
+  }
+  const pct = (winRate.rate * 100).toFixed(0);
+  const tone =
+    winRate.rate >= 0.5 ? 'text-emerald-300' : 'text-red-300';
   return (
-    <div className="text-left" title="Needs ict-trading-bot#557 closed-trades endpoint">
+    <div
+      className="text-left"
+      title={`${winRate.closedCount} closed trade${winRate.closedCount === 1 ? '' : 's'} on this pattern in the last 7d`}
+    >
       <span className="text-gray-500">7d win rate </span>
-      <span className="text-gray-600">—</span>
+      <span className={cn('font-mono tabular-nums', tone)}>{pct}%</span>
+      <span className="text-gray-600 text-[10px]"> ({winRate.closedCount})</span>
     </div>
   );
+}
+
+/**
+ * Build a per-pattern win-rate map from the closed-trades feed.
+ *
+ * Window is the last 7 days from `now`. A trade is attributed to a
+ * pattern via `closedTrade.pattern` — the bot writer copies the signal's
+ * pattern onto the trade row's `strategy_name`. A trade is a "win" when
+ * `realizedPnl > 0`; ties (0) and losses are excluded from the numerator
+ * but counted in the denominator (closedCount).
+ *
+ * Returns an empty map when `closedTrades` is null (still loading) or
+ * when no rows fall in the window.
+ */
+function computeWinRateByPattern(
+  closedTrades: ClosedTrade[] | null,
+  now: number,
+): Map<string, PatternWinRate> {
+  const out = new Map<string, PatternWinRate>();
+  if (!closedTrades || closedTrades.length === 0) return out;
+  const cutoff = now - WIN_RATE_WINDOW_MS;
+  // Tally per pattern: { wins, total }.
+  const tally = new Map<string, { wins: number; total: number }>();
+  for (const t of closedTrades) {
+    if (!t.pattern) continue;
+    const closedAtTs = new Date(t.closedAt).getTime();
+    if (!isFinite(closedAtTs) || closedAtTs < cutoff) continue;
+    let row = tally.get(t.pattern);
+    if (!row) {
+      row = { wins: 0, total: 0 };
+      tally.set(t.pattern, row);
+    }
+    row.total += 1;
+    if (t.realizedPnl > 0) row.wins += 1;
+  }
+  for (const [pattern, { wins, total }] of tally) {
+    out.set(pattern, { rate: total === 0 ? 0 : wins / total, closedCount: total });
+  }
+  return out;
 }
 
 function FilterChips({

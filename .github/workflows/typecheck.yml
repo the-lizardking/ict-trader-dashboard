@@ -1,0 +1,43 @@
+name: typecheck
+
+# Gate every PR on `npm run typecheck`. The dashboard ran 12 PRs without
+# any typecheck gate; the M6 correctness pass shipped a contract that
+# would have caught (e.g. a number-vs-string `id` lie) statically.
+#
+# Out of scope here: a full test suite (Vitest + a handful of api.ts
+# smoke tests) is queued as a follow-up sprint — the no-tests gap is
+# real but adding the runner deserves its own PR.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Build
+        # The build is the second-best gate after typecheck — catches
+        # `import.meta.env` issues, missing assets, and bundler-time
+        # regressions that the typecheck doesn't.
+        run: npm run build
