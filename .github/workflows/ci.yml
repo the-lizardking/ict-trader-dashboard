@@ -1,12 +1,12 @@
-name: typecheck
+name: ci
 
-# Gate every PR on `npm run typecheck`. The dashboard ran 12 PRs without
-# any typecheck gate; the M6 correctness pass shipped a contract that
-# would have caught (e.g. a number-vs-string `id` lie) statically.
+# Gate every PR on typecheck + tests + build. The dashboard ran 12 PRs
+# without any CI gate; this is the bar going forward.
 #
-# Out of scope here: a full test suite (Vitest + a handful of api.ts
-# smoke tests) is queued as a follow-up sprint — the no-tests gap is
-# real but adding the runner deserves its own PR.
+# Test runner: vitest. The api.ts smoke suite catches wire-shape drift
+# between the bot's REST surface and the dashboard's TS interfaces (the
+# kind of drift that landed today between #14 and #17 — id type, count
+# nullability) on PR open.
 
 on:
   pull_request:
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 jobs:
-  typecheck:
+  ci:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -36,8 +36,11 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      - name: Test
+        run: npm test
+
       - name: Build
-        # The build is the second-best gate after typecheck — catches
+        # The build is the third gate after typecheck + tests — catches
         # `import.meta.env` issues, missing assets, and bundler-time
-        # regressions that the typecheck doesn't.
+        # regressions that typecheck doesn't.
         run: npm run build

@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
@@ -17,6 +18,19 @@ export default defineConfig(({ mode }) => {
     },
     server: {
       hmr: process.env.DISABLE_HMR !== 'true',
+    },
+    test: {
+      // happy-dom is enough for the api.ts smoke suite (we only need
+      // fetch / URLSearchParams / AbortController, all of which the
+      // happy-dom shim provides). jsdom would also work but is heavier.
+      environment: 'happy-dom',
+      include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+      // Pin global timeout slightly tighter than the api.ts default
+      // so a hung mock-fetch trips the test, not vitest's outer timer.
+      testTimeout: 10_000,
+      // No watch on CI; npm test runs `vitest run` (single pass) per
+      // package.json. The `test:watch` script keeps the dev workflow.
+      reporters: ['default'],
     },
     build: {
       // Vendor-level code splitting. Each split bumps cache efficiency
