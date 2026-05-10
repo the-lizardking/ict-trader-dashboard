@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/bot/:path*", "destination": "http://158.178.210.252:8001/api/bot/:path*" },
+    { "source": "/api/bot/:path*", "destination": "https://planners-lbs-blind-trainer.trycloudflare.com/api/bot/:path*" },
     { "source": "/(.*)", "destination": "/" }
   ]
 }
