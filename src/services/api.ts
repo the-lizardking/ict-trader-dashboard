@@ -1,6 +1,7 @@
 import {
   BotConfigResponse,
   BotStats,
+  BacktestRun,
   ClosedTrade,
   LiquidityResponse,
   LogEntry,
@@ -161,6 +162,22 @@ export const getLiquidity = (
  */
 export const getBotConfig = (): Promise<BotConfigResponse> =>
   fetchJson<BotConfigResponse>('/api/bot/config');
+
+/**
+ * Recent backtest runs for the Backtests tab (M5 P4 — bot PR #689).
+ * One row per `/test <strategy>` invocation; the bot consumer writes
+ * each run's headline metrics to `backtest_results`. `limit` is
+ * clamped 1..200 by the bot; `strategy` is an optional exact-match
+ * filter against the registered strategy name.
+ */
+export const getBacktests = (
+  limit = 50,
+  strategy?: string,
+): Promise<BacktestRun[]> => {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (strategy) params.set('strategy', strategy);
+  return fetchJson<BacktestRun[]>(`/api/bot/backtests?${params.toString()}`);
+};
 
 /**
  * Closed trades for the Journals tab. The bot endpoint

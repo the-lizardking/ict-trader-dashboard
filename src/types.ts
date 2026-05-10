@@ -17,6 +17,33 @@ export interface ClosedTrade {
   derivedFromLogs?: boolean;
 }
 
+/**
+ * One row from the bot's `backtest_results` table — the M5 strategy-test
+ * consumer writes one per `/test <strategy>` invocation. Surfaced via
+ * `GET /api/bot/backtests` (M5 P4) for the Backtests tab.
+ *
+ * The bot returns headline metrics only; the full row (config blob,
+ * total_pnl_pct, avg_win/loss, largest_win/loss) lives in
+ * `trade_journal.db::backtest_results` and can be pulled by `id`.
+ */
+export interface BacktestRun {
+  id: number;
+  strategy: string | null;
+  runDate: string | null;
+  startDate: string | null;
+  endDate: string | null;
+  totalTrades: number;
+  winningTrades: number;
+  losingTrades: number;
+  winRate: number | null;
+  profitFactor: number | null;
+  expectancy: number | null;
+  sharpeRatio: number | null;
+  maxDrawdownPct: number | null;
+  totalPnl: number | null;
+  createdAt: string | null;
+}
+
 export interface BotStats {
   pnl24h: number;
   totalPnL: number;

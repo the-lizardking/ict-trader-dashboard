@@ -6,6 +6,7 @@ import {
   Droplets,
   Clock,
   BookOpen,
+  FlaskConical,
   BarChart2,
   Settings,
   RefreshCw,
@@ -22,6 +23,7 @@ import EquityChart from './EquityChart';
 import LogViewer from './LogViewer';
 import PositionsPanel from './PositionsPanel';
 import StrategySignals from './StrategySignals';
+import BacktestsTab from './BacktestsTab';
 import JournalsTab from './JournalsTab';
 import ModelsTab from './ModelsTab';
 import TimePriceTab from './TimePriceTab';
@@ -90,6 +92,7 @@ const NAV_SECTIONS = [
     label: 'Trading Log',
     items: [
       { id: 'journals', label: 'Journals', icon: BookOpen },
+      { id: 'backtests', label: 'Backtests', icon: FlaskConical },
       { id: 'performance', label: 'Performance', icon: BarChart2 },
       { id: 'settings', label: 'Settings', icon: Settings },
     ],
@@ -558,6 +561,8 @@ export default function Dashboard() {
             </>
           ) : activeNav === 'journals' ? (
             <JournalsTab />
+          ) : activeNav === 'backtests' ? (
+            <BacktestsTab />
           ) : activeNav === 'models' ? (
             <ModelsTab signals={signals} positions={positions} />
           ) : activeNav === 'liquidity' ? (
