@@ -55,4 +55,4 @@ This enables CORS for the Vercel domain.
 
 ## Related
 
-- [ict-trading-bot](https://github.com/the-lizardking/ict-trading-bot) — Python trading bot + FastAPI data feed
+- [ict-trading-bot](https://github.com/benbaichmankass/ict-trading-bot) — Python trading bot + FastAPI data feed
