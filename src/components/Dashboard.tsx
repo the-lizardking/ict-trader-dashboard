@@ -30,7 +30,6 @@ import TimePriceTab from './TimePriceTab';
 import PerformanceTab from './PerformanceTab';
 import LiquidityMapsTab from './LiquidityMapsTab';
 import SettingsTab from './SettingsTab';
-import Placeholder from './Placeholder';
 import Diagnostics from './Diagnostics';
 import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
 import { getMarketAnalysis } from '../services/geminiService';

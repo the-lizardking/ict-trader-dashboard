@@ -11,9 +11,30 @@ function isShort(side: string) {
   return s === 'sell' || s === 'short';
 }
 
-function formatQty(qty: number) {
+function formatQty(qty: number | null | undefined) {
+  // Bot's /api/bot/positions returns COALESCE(pnl, 0) for unrealizedPnl
+  // but passes qty + entry_price through without coalesce. A NULL slipping
+  // into either is unlikely (open trades shouldn't lack a size) but a
+  // defensive `—` is safer than a runtime `qty.toFixed is not a function`.
+  if (qty == null || !isFinite(qty)) return '—';
   if (Math.abs(qty) >= 1) return qty.toFixed(4);
   return qty.toFixed(6);
+}
+
+function formatPrice(price: number | null | undefined) {
+  if (price == null || !isFinite(price)) return '—';
+  return String(price);
+}
+
+function formatUnrealizedPnl(pnl: number | null | undefined): {
+  text: string;
+  positive: boolean;
+} {
+  if (pnl == null || !isFinite(pnl)) return { text: '—', positive: false };
+  return {
+    text: `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`,
+    positive: pnl >= 0,
+  };
 }
 
 export default function PositionsPanel({ positions, error }: PositionsPanelProps) {
@@ -79,19 +100,28 @@ export default function PositionsPanel({ positions, error }: PositionsPanelProps
                 <div className="min-w-0">
                   <p className="text-sm text-gray-200 truncate">{p.symbol}</p>
                   <p className="text-[10px] text-gray-500 truncate">
-                    {p.account} · {formatQty(p.qty)} @ {p.entryPrice}
+                    {p.account} · {formatQty(p.qty)} @ {formatPrice(p.entryPrice)}
                   </p>
                 </div>
               </div>
               <div className="text-right shrink-0">
-                <p
-                  className={cn(
-                    'text-sm font-mono font-semibold',
-                    p.unrealizedPnl >= 0 ? 'text-emerald-400' : 'text-red-400',
-                  )}
-                >
-                  {p.unrealizedPnl >= 0 ? '+' : ''}${p.unrealizedPnl.toFixed(2)}
-                </p>
+                {(() => {
+                  const u = formatUnrealizedPnl(p.unrealizedPnl);
+                  return (
+                    <p
+                      className={cn(
+                        'text-sm font-mono font-semibold',
+                        u.text === '—'
+                          ? 'text-gray-500'
+                          : u.positive
+                          ? 'text-emerald-400'
+                          : 'text-red-400',
+                      )}
+                    >
+                      {u.text}
+                    </p>
+                  );
+                })()}
                 <p className="text-[10px] text-gray-500">unrealized</p>
               </div>
             </div>

@@ -210,8 +210,10 @@ export default function BacktestsTab() {
       {error && (
         <div className="rounded-md border border-red-500/40 bg-red-500/10 px-4 py-2 text-xs text-red-200">
           Failed to load backtests ({describeError(error)}). The bot may be
-          offline, or the `/api/bot/backtests` endpoint is not yet deployed
-          on this VM.
+          offline, or the deploy on the VM is behind the `/api/bot/backtests`
+          endpoint shipped 2026-05-10. The endpoint returns an empty list on
+          a fresh install (no backtests run yet) — a real error here
+          indicates an outage, not "no data".
         </div>
       )}
 
