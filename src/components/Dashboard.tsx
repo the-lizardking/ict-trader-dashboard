@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard,
@@ -23,14 +23,20 @@ import EquityChart from './EquityChart';
 import LogViewer from './LogViewer';
 import PositionsPanel from './PositionsPanel';
 import StrategySignals from './StrategySignals';
-import BacktestsTab from './BacktestsTab';
-import JournalsTab from './JournalsTab';
-import ModelsTab from './ModelsTab';
-import TimePriceTab from './TimePriceTab';
-import PerformanceTab from './PerformanceTab';
-import LiquidityMapsTab from './LiquidityMapsTab';
-import SettingsTab from './SettingsTab';
 import Diagnostics from './Diagnostics';
+// Tab components are lazy-loaded so the initial bundle only ships the
+// Overview-tab dependencies (the default landing view). Each tab's
+// chunk is fetched on first navigation; subsequent visits hit the
+// browser's module cache. This drops the entry chunk below Vite's
+// 500 kB warning threshold and lets recharts / framer-motion / Gemini
+// SDK split into their own vendor chunks (see vite.config.ts).
+const BacktestsTab = lazy(() => import('./BacktestsTab'));
+const JournalsTab = lazy(() => import('./JournalsTab'));
+const ModelsTab = lazy(() => import('./ModelsTab'));
+const TimePriceTab = lazy(() => import('./TimePriceTab'));
+const PerformanceTab = lazy(() => import('./PerformanceTab'));
+const LiquidityMapsTab = lazy(() => import('./LiquidityMapsTab'));
+const SettingsTab = lazy(() => import('./SettingsTab'));
 import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
 import { getMarketAnalysis } from '../services/geminiService';
 import { cn } from '../lib/utils';
@@ -180,6 +186,20 @@ function OfflinePanel({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function TabLoadingFallback({ label }: { label: string }) {
+  // Suspense fallback for the lazy-loaded tabs. The chunk fetch is
+  // typically <50 ms so this rarely flashes; we still want a stable
+  // placeholder so the tab area doesn't collapse to zero height
+  // mid-transition. Each tab manages its own data-loading state
+  // after its module mounts.
+  return (
+    <div className="flex items-center gap-2 text-xs text-gray-500 px-1 py-2">
+      <RefreshCw size={12} className="animate-spin" />
+      <span>Loading {label}…</span>
     </div>
   );
 }
@@ -559,19 +579,33 @@ export default function Dashboard() {
               <Diagnostics />
             </>
           ) : activeNav === 'journals' ? (
-            <JournalsTab />
+            <Suspense fallback={<TabLoadingFallback label="Journals" />}>
+              <JournalsTab />
+            </Suspense>
           ) : activeNav === 'backtests' ? (
-            <BacktestsTab />
+            <Suspense fallback={<TabLoadingFallback label="Backtests" />}>
+              <BacktestsTab />
+            </Suspense>
           ) : activeNav === 'models' ? (
-            <ModelsTab signals={signals} positions={positions} />
+            <Suspense fallback={<TabLoadingFallback label="Models" />}>
+              <ModelsTab signals={signals} positions={positions} />
+            </Suspense>
           ) : activeNav === 'liquidity' ? (
-            <LiquidityMapsTab />
+            <Suspense fallback={<TabLoadingFallback label="Liquidity Maps" />}>
+              <LiquidityMapsTab />
+            </Suspense>
           ) : activeNav === 'time-price' ? (
-            <TimePriceTab signals={signals} />
+            <Suspense fallback={<TabLoadingFallback label="Time & Price" />}>
+              <TimePriceTab signals={signals} />
+            </Suspense>
           ) : activeNav === 'performance' ? (
-            <PerformanceTab fallbackEquity={equityHistory} />
+            <Suspense fallback={<TabLoadingFallback label="Performance" />}>
+              <PerformanceTab fallbackEquity={equityHistory} />
+            </Suspense>
           ) : activeNav === 'settings' ? (
-            <SettingsTab />
+            <Suspense fallback={<TabLoadingFallback label="Settings" />}>
+              <SettingsTab />
+            </Suspense>
           ) : (
             <>
               {anyError && (
