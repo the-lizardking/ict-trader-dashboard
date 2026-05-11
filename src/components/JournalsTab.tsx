@@ -408,20 +408,26 @@ export default function JournalsTab() {
                 >
                   Model scores
                 </th>
+                <th
+                  className="px-3 py-2 font-medium"
+                  title="Per-trade score assigned by the most recent /health-review run. Populated by an upcoming bot-side hook."
+                >
+                  HC score
+                </th>
                 <th className="px-3 py-2 font-medium">Notes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {trades === null && !error && (
                 <tr>
-                  <td colSpan={10} className="px-3 py-8 text-center text-gray-500">
+                  <td colSpan={11} className="px-3 py-8 text-center text-gray-500">
                     Loading closed trades…
                   </td>
                 </tr>
               )}
               {trades !== null && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="px-3 py-8 text-center text-gray-500">
+                  <td colSpan={11} className="px-3 py-8 text-center text-gray-500">
                     {trades.length === 0
                       ? 'No closed trades yet. The journal will populate as positions close.'
                       : 'No trades match the current filters.'}
@@ -474,6 +480,12 @@ export default function JournalsTab() {
                     </td>
                     <td className="px-3 py-2">
                       <ScoresCell scores={scoresByTradeId.get(t.id) ?? null} />
+                    </td>
+                    <td className="px-3 py-2">
+                      <HealthCheckScoreCell
+                        score={t.healthCheckScore ?? null}
+                        note={t.healthCheckNote ?? null}
+                      />
                     </td>
                     <td className="px-3 py-2">
                       <button
@@ -603,6 +615,31 @@ function scoreTone(score: number | null): string {
   if (score >= 0.7) return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300';
   if (score >= 0.4) return 'border-amber-500/40 bg-amber-500/10 text-amber-300';
   return 'border-red-500/40 bg-red-500/10 text-red-300';
+}
+
+function HealthCheckScoreCell({ score, note }: { score: number | null; note: string | null }) {
+  if (score === null || !Number.isFinite(score)) {
+    return (
+      <span
+        className="text-gray-600 text-[10px]"
+        title="No /health-review score recorded for this trade yet. Bot-side scoring hook is a queued follow-up."
+      >
+        —
+      </span>
+    );
+  }
+  const tone = scoreTone(score);
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border tabular-nums',
+        tone,
+      )}
+      title={note ?? `Health-check score: ${score.toFixed(2)}`}
+    >
+      {score.toFixed(2)}
+    </span>
+  );
 }
 
 function shortenModelId(id: string): string {

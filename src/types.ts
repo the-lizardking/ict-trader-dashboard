@@ -15,6 +15,16 @@ export interface ClosedTrade {
   /** When true, the row was derived client-side from /api/bot/logs because the
    *  bot has no /api/bot/trades/closed endpoint yet. Best-effort, missing fields. */
   derivedFromLogs?: boolean;
+  /**
+   * Score assigned to this trade during the most recent /health-review
+   * (layer-2) run. Null until the bot adds a per-trade scoring hook to the
+   * health-check pipeline (queued follow-up — see PR thread). The dashboard
+   * renders an em-dash for null so the column lights up automatically once
+   * the bot starts populating it.
+   */
+  healthCheckScore?: number | null;
+  /** Optional summary attached to the health-check score (e.g. "TP hit cleanly"). */
+  healthCheckNote?: string | null;
 }
 
 /**
