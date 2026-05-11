@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, BookOpen, Filter, RefreshCw, StickyNote, X } from 'lucide-react';
-import { ClosedTrade } from '../types';
-import { getClosedTrades, BotApiError, describeError } from '../services/api';
+import { ClosedTrade, TradeScoreEntry, TradeShadowScore } from '../types';
+import {
+  getClosedTrades,
+  getTradeScores,
+  BotApiError,
+  describeError,
+} from '../services/api';
 import { cn } from '../lib/utils';
 
 const POLL_MS = 30_000;
@@ -61,6 +66,9 @@ export default function JournalsTab() {
   const [trades, setTrades] = useState<ClosedTrade[] | null>(null);
   const [error, setError] = useState<BotApiError | null>(null);
   const [loading, setLoading] = useState(false);
+  const [scores, setScores] = useState<TradeScoreEntry[] | null>(null);
+  const [scoresErr, setScoresErr] = useState<BotApiError | null>(null);
+  const [shadowLogPresent, setShadowLogPresent] = useState<boolean | null>(null);
 
   const [symbolFilter, setSymbolFilter] = useState('');
   const [sideFilter, setSideFilter] = useState<'all' | 'long' | 'short'>('all');
@@ -100,6 +108,40 @@ export default function JournalsTab() {
       clearInterval(id);
     };
   }, [fetchTrades]);
+
+  // Pull per-trade shadow-prediction scores in parallel so the column
+  // can render alongside the rest of the row. The bot keys scores by
+  // trade_id; we build a map for O(1) lookup at render time.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      getTradeScores(100, true)
+        .then((resp) => {
+          if (cancelled) return;
+          setScores(resp.trades);
+          setShadowLogPresent(resp.log_present);
+          setScoresErr(null);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setScoresErr(
+            err instanceof BotApiError ? err : new BotApiError('?', 0, String(err), 'network'),
+          );
+        });
+    };
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const scoresByTradeId = useMemo(() => {
+    const m = new Map<string, TradeShadowScore[]>();
+    for (const t of scores ?? []) m.set(t.trade_id, t.scores);
+    return m;
+  }, [scores]);
 
   const patterns = useMemo(() => {
     if (!trades) return [];
@@ -360,20 +402,26 @@ export default function JournalsTab() {
                   </button>
                 </th>
                 <th className="px-3 py-2 font-medium">Duration</th>
+                <th
+                  className="px-3 py-2 font-medium"
+                  title="Shadow-model prediction scores recorded between the trade's open and close"
+                >
+                  Model scores
+                </th>
                 <th className="px-3 py-2 font-medium">Notes</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800">
               {trades === null && !error && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-8 text-center text-gray-500">
+                  <td colSpan={10} className="px-3 py-8 text-center text-gray-500">
                     Loading closed trades…
                   </td>
                 </tr>
               )}
               {trades !== null && filtered.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-8 text-center text-gray-500">
+                  <td colSpan={10} className="px-3 py-8 text-center text-gray-500">
                     {trades.length === 0
                       ? 'No closed trades yet. The journal will populate as positions close.'
                       : 'No trades match the current filters.'}
@@ -425,6 +473,9 @@ export default function JournalsTab() {
                       {formatDuration(t.openedAt, t.closedAt)}
                     </td>
                     <td className="px-3 py-2">
+                      <ScoresCell scores={scoresByTradeId.get(t.id) ?? null} />
+                    </td>
+                    <td className="px-3 py-2">
                       <button
                         type="button"
                         onClick={() => startEditNote(t.id)}
@@ -445,6 +496,17 @@ export default function JournalsTab() {
           </table>
         </div>
       </div>
+
+      {scoresErr && (
+        <p className="text-[10px] text-amber-300 px-1">
+          Model scores unavailable ({describeError(scoresErr)})
+        </p>
+      )}
+      {shadowLogPresent === false && !scoresErr && (
+        <p className="text-[10px] text-gray-500 px-1">
+          Shadow-predictions log not present on the bot — model scores column will be empty.
+        </p>
+      )}
 
       {editingNoteId && (
         <div
@@ -497,4 +559,55 @@ export default function JournalsTab() {
       )}
     </div>
   );
+}
+
+function ScoresCell({ scores }: { scores: TradeShadowScore[] | null }) {
+  if (scores === null) return <span className="text-gray-600 text-[10px]">…</span>;
+  if (scores.length === 0) return <span className="text-gray-600 text-[10px]">—</span>;
+  return (
+    <div className="flex flex-wrap gap-1 max-w-[16rem]">
+      {scores.map((s) => {
+        const last = s.score_last ?? s.score_mean;
+        const tone = scoreTone(last);
+        return (
+          <span
+            key={`${s.model_id}-${s.stage}`}
+            className={cn(
+              'inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border',
+              tone,
+            )}
+            title={
+              `${s.model_id} (${s.stage})\n` +
+              `count: ${s.count}\n` +
+              (s.score_first !== null ? `first: ${s.score_first.toFixed(3)}\n` : '') +
+              (s.score_last !== null ? `last: ${s.score_last.toFixed(3)}\n` : '') +
+              (s.score_mean !== null ? `mean: ${s.score_mean.toFixed(3)}\n` : '') +
+              (s.score_min !== null && s.score_max !== null
+                ? `range: ${s.score_min.toFixed(3)} → ${s.score_max.toFixed(3)}`
+                : '')
+            }
+          >
+            <span className="font-mono">{shortenModelId(s.model_id)}</span>
+            <span className="tabular-nums">{last !== null ? last.toFixed(2) : '—'}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function scoreTone(score: number | null): string {
+  if (score === null || !Number.isFinite(score)) {
+    return 'border-gray-700 bg-gray-800/40 text-gray-400';
+  }
+  if (score >= 0.7) return 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300';
+  if (score >= 0.4) return 'border-amber-500/40 bg-amber-500/10 text-amber-300';
+  return 'border-red-500/40 bg-red-500/10 text-red-300';
+}
+
+function shortenModelId(id: string): string {
+  // Drop a common "-shadow-vN" suffix for compactness but keep the
+  // distinguishing prefix. Falls through to the raw id if the heuristic
+  // doesn't match.
+  return id.replace(/-shadow(?:-v\d+)?$/i, '');
 }

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   LayoutDashboard,
@@ -16,11 +16,13 @@ import {
   Sparkles,
   Menu,
   Workflow,
+  HeartPulse,
   X,
 } from 'lucide-react';
 import { BotStats, LogEntry, Position, Signal, EquityPoint } from '../types';
 import StatsGrid from './StatsGrid';
 import EquityChart from './EquityChart';
+import LiveChart from './LiveChart';
 import LogViewer from './LogViewer';
 import PositionsPanel from './PositionsPanel';
 import StrategySignals from './StrategySignals';
@@ -38,8 +40,9 @@ const TimePriceTab = lazy(() => import('./TimePriceTab'));
 const PerformanceTab = lazy(() => import('./PerformanceTab'));
 const LiquidityMapsTab = lazy(() => import('./LiquidityMapsTab'));
 const SettingsTab = lazy(() => import('./SettingsTab'));
+const SystemHealthTab = lazy(() => import('./SystemHealthTab'));
 const TradeProcessTab = lazy(() => import('./TradeProcessTab'));
-import { getDashboardSnapshot, describeError, BotApiError } from '../services/api';
+import { getDashboardSnapshot, describeError, BotApiError, getBotConfig } from '../services/api';
 import { getMarketAnalysis } from '../services/geminiService';
 import { cn } from '../lib/utils';
 
@@ -102,6 +105,7 @@ const NAV_SECTIONS = [
       { id: 'journals', label: 'Journals', icon: BookOpen },
       { id: 'backtests', label: 'Backtests', icon: FlaskConical },
       { id: 'performance', label: 'Performance', icon: BarChart2 },
+      { id: 'system-health', label: 'System Health', icon: HeartPulse },
       { id: 'settings', label: 'Settings', icon: Settings },
     ],
   },
@@ -235,6 +239,7 @@ export default function Dashboard() {
   const [signals, setSignals] = useState<Signal[] | null>(null);
   const [equityHistory, setEquityHistory] = useState<EquityPoint[]>(() => loadEquityBuffer());
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [configSymbols, setConfigSymbols] = useState<string[]>([]);
 
   // Per-section error state. null = healthy on last poll.
   const [statsErr, setStatsErr] = useState<SectionErr | null>(null);
@@ -329,6 +334,46 @@ export default function Dashboard() {
       if (timer) clearTimeout(timer);
     };
   }, [fetchData]);
+
+  // Pull the strategies' configured symbols once so the chart selector
+  // doesn't hardcode 'BTCUSDT'. Best-effort: failure here just leaves the
+  // selector populated by the live positions feed.
+  useEffect(() => {
+    let cancelled = false;
+    getBotConfig()
+      .then((cfg) => {
+        if (cancelled) return;
+        const set = new Set<string>();
+        for (const strat of Object.values(cfg.strategies ?? {})) {
+          const syms = (strat as { symbols?: unknown }).symbols;
+          if (Array.isArray(syms)) {
+            for (const s of syms) {
+              if (typeof s === 'string' && s.trim()) set.add(s.trim().toUpperCase());
+            }
+          }
+        }
+        setConfigSymbols(Array.from(set).sort());
+      })
+      .catch(() => {
+        /* best effort — selector falls back to positions */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Union of (live position symbols, configured strategy symbols). The
+  // chart needs symbols ASAP — using configSymbols alone would hide live
+  // symbols not yet in config, so we union both sources.
+  const chartSymbols = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of positions ?? []) {
+      if (p.symbol) set.add(p.symbol);
+    }
+    for (const s of configSymbols) set.add(s);
+    if (set.size === 0) set.add('BTCUSDT');
+    return Array.from(set).sort();
+  }, [positions, configSymbols]);
 
   const handleAiAnalysis = async () => {
     setIsAiLoading(true);
@@ -613,6 +658,10 @@ export default function Dashboard() {
             <Suspense fallback={<TabLoadingFallback label="Settings" />}>
               <SettingsTab />
             </Suspense>
+          ) : activeNav === 'system-health' ? (
+            <Suspense fallback={<TabLoadingFallback label="System Health" />}>
+              <SystemHealthTab vmHealth={stats?.vmHealth ?? null} botStatus={stats?.status ?? null} />
+            </Suspense>
           ) : (
             <>
               {anyError && (
@@ -621,6 +670,7 @@ export default function Dashboard() {
                 </div>
               )}
               <StatsGrid stats={stats} error={stats ? null : statsErr} />
+              <LiveChart positions={positions} signals={signals} symbols={chartSymbols} />
               <EquityChart data={equityHistory} />
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
