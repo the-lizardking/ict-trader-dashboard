@@ -1,5 +1,29 @@
 # ICT Trader Dashboard — CLAUDE.md
 
+## Bot-side authority split (consumer note, adopted 2026-05-11)
+
+The dashboard is a **pure read-only consumer** of the bot's REST
+API — it never mutates live trading state directly, so the bot-side
+[VM authority split](https://github.com/benbaichmankass/ict-trading-bot/blob/main/CLAUDE.md#vm-authority-split-adopted-2026-05-11)
+governs the bot, not this repo. But Claude sessions touching the
+dashboard should know which side of the split each endpoint comes
+from:
+
+| Endpoint family | Source VM | Authority side |
+|---|---|---|
+| `/api/bot/{stats,positions,signals,logs,trades/*,liquidity,config,backtests,pnl/*}` | Live trader | Restricted (existing). Adding new panels that consume these endpoints is autonomous-Claude on the dashboard side; the bot-side endpoint additions follow the bot's normal Tier-1 / Tier-2 / Tier-3 rules. |
+| `/api/bot/shadow/{predictions,stats,drift}` | Live trader (reads `runtime_logs/shadow_predictions.jsonl` written by the live `Coordinator`) | Restricted on the bot side, but the data source is trainer-VM-produced models running in shadow mode. The dashboard renderer is autonomous-Claude. |
+| `/api/bot/health/{latest,history,snapshot,services}` | Live trader | Restricted (live-VM health). Dashboard renderer is autonomous-Claude. |
+| Future trainer-VM telemetry (model registry views, training-cycle logs, dataset cards) | **Trainer** — `ict-trainer-vm` once provisioned | Autonomous-Claude both bot-side (per trainer charter) and dashboard-side. Move fast. |
+
+**Hard limit that survives the split:** A dashboard wiring that
+would *initiate* a live-trade action — e.g., the FORCED STOP button
+in the header, or a "promote this model to limited_live" button —
+is **operator-gated** at the bot-side endpoint, not at the
+dashboard. The dashboard PR is autonomous; the bot-side endpoint
+that takes the action is Tier-3 per
+[`vm-operator-mode.md`](https://github.com/benbaichmankass/ict-trading-bot/blob/main/docs/claude/vm-operator-mode.md). Don't ship the dashboard button before the bot endpoint is approved.
+
 ## Project Overview
 React 19 + Vite + Tailwind CSS v4 SPA deployed on Vercel.
 Calls the ICT Trading Bot's FastAPI (`ict-trading-bot`) REST API for live data.
