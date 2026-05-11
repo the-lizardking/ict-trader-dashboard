@@ -298,3 +298,87 @@ export interface TradeScoresResponse {
   shadow_record_count: number;
   trades: TradeScoreEntry[];
 }
+
+/**
+ * One row from /api/bot/shadow/predictions (S-AI-WS8-PART-2). Each row
+ * is a single shadow-model invocation recorded in
+ * runtime_logs/shadow_predictions.jsonl by the WS7 harness.
+ * `row_keys` are the feature-row column names the model received
+ * (the values are intentionally not exposed to the dashboard — only
+ * the score and the feature-set shape).
+ */
+export interface ShadowPredictionRecord {
+  predicted_at_utc: string;
+  model_id: string;
+  stage: string;
+  score: number;
+  row_keys: string[];
+}
+
+export interface ShadowPredictionsResponse {
+  log_present: boolean;
+  log_path: string;
+  records: ShadowPredictionRecord[];
+  count: number;
+}
+
+/**
+ * Per-(model_id, stage) aggregate from /api/bot/shadow/stats. The bot
+ * aggregates via ml.shadow.inspector.aggregate over the same filtered
+ * record set the predictions endpoint returns.
+ */
+export interface ShadowStatRecord {
+  model_id: string;
+  stage: string;
+  count: number;
+  score_mean: number | null;
+  score_min: number | null;
+  score_max: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+  row_keys_seen: string[];
+}
+
+export interface ShadowStatsResponse {
+  log_present: boolean;
+  log_path: string;
+  records: ShadowStatRecord[];
+  count: number;
+}
+
+/**
+ * /api/bot/shadow/drift?model_id=X (S-AI-WS8-PART-3). Window-over-window
+ * score-distribution comparison via KS statistic + PSI score. Reference
+ * window is the `reference_days` immediately before the current window;
+ * current window is the most recent `current_days`. Both anchored at
+ * "now".
+ *
+ * Two shapes possible — `verdict: "insufficient_data"` means one of
+ * the windows had zero records, in which case the metric fields are
+ * absent. Otherwise the full report is populated.
+ */
+export interface ShadowDriftResponse {
+  log_present: boolean;
+  log_path: string;
+  model_id: string;
+  stage: string | null;
+  reference_window_start: string;
+  current_window_start: string;
+  reference_count: number;
+  current_count: number;
+  verdict:
+    | 'no_change'
+    | 'minor'
+    | 'moderate'
+    | 'significant'
+    | 'insufficient_data'
+    | string;
+  reference_mean?: number | null;
+  current_mean?: number | null;
+  reference_stdev?: number | null;
+  current_stdev?: number | null;
+  ks?: number | null;
+  ks_verdict?: string;
+  psi?: number | null;
+  psi_verdict?: string;
+}
