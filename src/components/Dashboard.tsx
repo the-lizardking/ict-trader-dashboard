@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, lazy, Suspense } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
+  Activity,
   LayoutDashboard,
   Layers,
   Droplets,
@@ -36,6 +37,7 @@ import Diagnostics from './Diagnostics';
 const BacktestsTab = lazy(() => import('./BacktestsTab'));
 const JournalsTab = lazy(() => import('./JournalsTab'));
 const ModelsTab = lazy(() => import('./ModelsTab'));
+const ShadowModelsTab = lazy(() => import('./ShadowModelsTab'));
 const TimePriceTab = lazy(() => import('./TimePriceTab'));
 const PerformanceTab = lazy(() => import('./PerformanceTab'));
 const LiquidityMapsTab = lazy(() => import('./LiquidityMapsTab'));
@@ -94,6 +96,7 @@ const NAV_SECTIONS = [
     items: [
       { id: 'overview', label: 'Overview', icon: LayoutDashboard },
       { id: 'models', label: 'Models', icon: Layers },
+      { id: 'shadow-models', label: 'Shadow Models', icon: Activity },
       { id: 'liquidity', label: 'Liquidity Maps', icon: Droplets },
       { id: 'time-price', label: 'Time & Price', icon: Clock },
       { id: 'trade-process', label: 'Trade Process', icon: Workflow },
@@ -637,6 +640,10 @@ export default function Dashboard() {
           ) : activeNav === 'models' ? (
             <Suspense fallback={<TabLoadingFallback label="Models" />}>
               <ModelsTab signals={signals} positions={positions} />
+            </Suspense>
+          ) : activeNav === 'shadow-models' ? (
+            <Suspense fallback={<TabLoadingFallback label="Shadow Models" />}>
+              <ShadowModelsTab />
             </Suspense>
           ) : activeNav === 'liquidity' ? (
             <Suspense fallback={<TabLoadingFallback label="Liquidity Maps" />}>
