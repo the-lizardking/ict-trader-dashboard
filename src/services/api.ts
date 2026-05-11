@@ -3,11 +3,15 @@ import {
   BotStats,
   BacktestRun,
   ClosedTrade,
+  HealthHistoryResponse,
+  HealthLatestResponse,
+  HealthServicesResponse,
   LiquidityResponse,
   LogEntry,
   PnlHistoryPoint,
   Position,
   Signal,
+  TradeScoresResponse,
 } from '../types';
 
 const BOT_API = import.meta.env.VITE_BOT_API_URL ?? '';
@@ -162,6 +166,32 @@ export const getLiquidity = (
  */
 export const getBotConfig = (): Promise<BotConfigResponse> =>
   fetchJson<BotConfigResponse>('/api/bot/config');
+
+/** /api/bot/health/latest — most recent layered health snapshot. */
+export const getHealthLatest = (): Promise<HealthLatestResponse> =>
+  fetchJson<HealthLatestResponse>('/api/bot/health/latest');
+
+/** /api/bot/health/history?hours=N — newest-first snapshot history. */
+export const getHealthHistory = (
+  hours = 24,
+  includePayload = false,
+): Promise<HealthHistoryResponse> =>
+  fetchJson<HealthHistoryResponse>(
+    `/api/bot/health/history?hours=${hours}&include_payload=${includePayload}`,
+  );
+
+/** /api/bot/health/services — systemd unit states (allowlisted). */
+export const getHealthServices = (): Promise<HealthServicesResponse> =>
+  fetchJson<HealthServicesResponse>('/api/bot/health/services');
+
+/** /api/bot/trades/scores — shadow-prediction scores joined per trade window. */
+export const getTradeScores = (
+  limit = 50,
+  includeOpen = true,
+): Promise<TradeScoresResponse> =>
+  fetchJson<TradeScoresResponse>(
+    `/api/bot/trades/scores?limit=${limit}&include_open=${includeOpen}`,
+  );
 
 /**
  * Recent backtest runs for the Backtests tab (M5 P4 — bot PR #689).

@@ -15,6 +15,16 @@ export interface ClosedTrade {
   /** When true, the row was derived client-side from /api/bot/logs because the
    *  bot has no /api/bot/trades/closed endpoint yet. Best-effort, missing fields. */
   derivedFromLogs?: boolean;
+  /**
+   * Score assigned to this trade during the most recent /health-review
+   * (layer-2) run. Null until the bot adds a per-trade scoring hook to the
+   * health-check pipeline (queued follow-up — see PR thread). The dashboard
+   * renders an em-dash for null so the column lights up automatically once
+   * the bot starts populating it.
+   */
+  healthCheckScore?: number | null;
+  /** Optional summary attached to the health-check score (e.g. "TP hit cleanly"). */
+  healthCheckNote?: string | null;
 }
 
 /**
@@ -84,6 +94,13 @@ export interface Position {
   entryPrice: number;
   unrealizedPnl: number;
   openedAt: string;
+  // stopLoss / takeProfit / pattern were added to the bot's /api/bot/positions
+  // response so the overview chart can overlay TP/SL lines and the positions
+  // table can show the active pattern. null on older bot builds — renderers
+  // must treat null as "not provided".
+  stopLoss?: number | null;
+  takeProfit?: number | null;
+  pattern?: string | null;
 }
 
 export interface Signal {
@@ -195,4 +212,89 @@ export interface BotConfigResponse {
   };
   accounts: BotAccount[];
   strategies: Record<string, BotStrategyConfig>;
+}
+
+/**
+ * /api/bot/health/latest — the most recent health snapshot
+ * (artifacts/health/latest.json on the VM).
+ */
+export interface HealthSnapshot {
+  status: 'OK' | 'WARNING' | 'ERROR' | string;
+  summary: string | null;
+  action_required: string | null;
+  timestamp: string | null;
+  model: string | null;
+  checks: Record<string, { status: string | null; note: string | null } | null>;
+  error?: { message: string; type: string } | null;
+}
+
+export interface HealthLatestResponse {
+  present: boolean;
+  path: string;
+  snapshot: HealthSnapshot | null;
+}
+
+export interface HealthHistoryEntry {
+  file: string;
+  timestamp: string;
+  payload_timestamp: string | null;
+  status: string | null;
+  summary: string | null;
+  action_required: string | null;
+  model: string | null;
+  checks: Record<string, string | null>;
+  payload?: HealthSnapshot;
+}
+
+export interface HealthHistoryResponse {
+  present: boolean;
+  dir: string;
+  hours: number;
+  snapshots: HealthHistoryEntry[];
+}
+
+export interface ServiceState {
+  unit: string;
+  state: string | null;
+  sub_state: string | null;
+  active_enter_iso: string | null;
+}
+
+export interface HealthServicesResponse {
+  systemctl_available: boolean;
+  services: ServiceState[];
+}
+
+/**
+ * /api/bot/trades/scores — model-prediction scores joined to each trade's
+ * open→close window. `scores` is empty when no shadow predictions landed
+ * during the trade window (or the audit log is missing).
+ */
+export interface TradeShadowScore {
+  model_id: string;
+  stage: string;
+  count: number;
+  score_first: number | null;
+  score_last: number | null;
+  score_min: number | null;
+  score_max: number | null;
+  score_mean: number | null;
+  first_ts: string | null;
+  last_ts: string | null;
+}
+
+export interface TradeScoreEntry {
+  trade_id: string;
+  symbol: string;
+  status: string;
+  opened_at: string;
+  closed_at: string | null;
+  scores: TradeShadowScore[];
+}
+
+export interface TradeScoresResponse {
+  log_present: boolean;
+  log_path: string;
+  shadow_record_count: number;
+  trades: TradeScoreEntry[];
 }

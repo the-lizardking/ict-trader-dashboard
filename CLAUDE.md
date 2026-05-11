@@ -17,6 +17,10 @@ Browser (Vercel)
                                      ├── GET /api/bot/liquidity      (S-064, 2026-05-09)
                                      ├── GET /api/bot/config         (S-064, 2026-05-09)
                                      ├── GET /api/bot/backtests      (M5 P4, 2026-05-10)
+                                     ├── GET /api/bot/health/latest  (2026-05-11)
+                                     ├── GET /api/bot/health/history (2026-05-11)
+                                     ├── GET /api/bot/health/services(2026-05-11)
+                                     ├── GET /api/bot/trades/scores  (2026-05-11)
                                      └── GET /api/pnl/history        (S-063, no-session)
 ```
 
@@ -29,6 +33,7 @@ and makes CORS irrelevant (every dashboard request is same-origin).
 - React 19, Vite 6, TypeScript 5.8 (strict)
 - Tailwind CSS v4 (`@import "tailwindcss"` syntax, `@theme {}` block)
 - Recharts — equity curve area chart, performance + bar charts
+- `lightweight-charts` (TradingView) — live candle chart on Overview, per-tick updates via Bybit public WebSocket
 - Framer Motion (motion) — modal + tab transitions
 - Lucide React — icons
 - `@google/genai` — Gemini AI market analysis
@@ -79,6 +84,8 @@ src/
     Dashboard.tsx        — main layout, tab routing, polling loop, header, collapsible/mobile sidebar, modals, connection banners (allFailed vs partial)
     StatsGrid.tsx        — 4 metric cards (PnL, orders, status, infra)
     EquityChart.tsx      — Recharts area chart driven by a session rolling totalPnL buffer (10 min)
+    LiveChart.tsx        — Per-tick TradingView-style candle chart (Bybit public REST history + WS streaming kline). Overlays buy/sell markers from /api/bot/signals + entry/TP/SL price-lines from /api/bot/positions; symbol selector unions config + live positions.
+    SystemHealthTab.tsx  — VM resources + systemd service states + latest health snapshot + 24h snapshot history (consumes /api/bot/health/{latest,history,services})
     StrategySignals.tsx  — Active ICT Strategies — recent signals aggregated by pattern from /api/bot/signals
     PositionsPanel.tsx   — Open trades from /api/bot/positions
     LogViewer.tsx        — Terminal-style scrollable log feed

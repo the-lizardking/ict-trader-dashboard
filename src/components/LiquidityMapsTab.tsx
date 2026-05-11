@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Droplets, RefreshCw, TrendingDown, TrendingUp, Zap } from 'lucide-react';
-import { LiquidityResponse, LiquidityZone } from '../types';
-import { BotApiError, describeError, getLiquidity } from '../services/api';
+import { Activity, Droplets, RefreshCw, TrendingDown, TrendingUp, Zap } from 'lucide-react';
+import { LiquidityResponse, LiquidityZone, Signal } from '../types';
+import { BotApiError, describeError, getLiquidity, getSignals } from '../services/api';
 import { cn } from '../lib/utils';
 
 const POLL_MS = 30_000;
 const DEFAULT_LIMIT = 25;
-const FALLBACK_SYMBOLS = ['BTCUSDT', 'ETHUSDT'];
+// Used only on the first render when the bot hasn't told us its
+// available_symbols yet. Empty here on purpose — we render a disabled
+// placeholder rather than fabricate a symbol the bot might not serve.
+const FALLBACK_SYMBOLS: string[] = [];
 
 export default function LiquidityMapsTab() {
   const [symbol, setSymbol] = useState<string | null>(null);
   const [data, setData] = useState<LiquidityResponse | null>(null);
   const [error, setError] = useState<BotApiError | null>(null);
   const [loading, setLoading] = useState(false);
+  const [signals, setSignals] = useState<Signal[] | null>(null);
+  const [signalsErr, setSignalsErr] = useState<BotApiError | null>(null);
   const cancelledRef = useRef(false);
 
   const fetchOnce = useCallback(async (sym: string | null) => {
@@ -48,6 +53,43 @@ export default function LiquidityMapsTab() {
       clearInterval(id);
     };
   }, [fetchOnce, symbol]);
+
+  // Pull recent signals on the same cadence so the operator can see the
+  // raw decisions next to the liquidity zones that drove them.
+  useEffect(() => {
+    let cancelled = false;
+    const fetchSignals = () => {
+      getSignals()
+        .then((rows) => {
+          if (cancelled) return;
+          setSignals(rows);
+          setSignalsErr(null);
+        })
+        .catch((err) => {
+          if (cancelled) return;
+          setSignalsErr(
+            err instanceof BotApiError
+              ? err
+              : new BotApiError('?', 0, String(err), 'network'),
+          );
+        });
+    };
+    fetchSignals();
+    const id = setInterval(fetchSignals, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  // Limit the signals log to the currently-selected symbol so it stays
+  // glanceable. The Models tab already shows the cross-symbol view.
+  const filteredSignals = useMemo(() => {
+    if (!signals) return null;
+    const active = symbol ?? data?.symbol ?? '';
+    if (!active) return signals;
+    return signals.filter((s) => s.symbol === active);
+  }, [signals, symbol, data?.symbol]);
 
   const symbolOptions = useMemo(() => {
     const fromBot = data?.available_symbols ?? [];
@@ -99,7 +141,104 @@ export default function LiquidityMapsTab() {
       )}
 
       {sweeps.length > 0 && <RecentSweeps sweeps={sweeps} />}
+
+      <SignalsLog
+        signals={filteredSignals}
+        error={signalsErr}
+        activeSymbol={symbol ?? data?.symbol ?? ''}
+      />
     </div>
+  );
+}
+
+function SignalsLog({
+  signals,
+  error,
+  activeSymbol,
+}: {
+  signals: Signal[] | null;
+  error: BotApiError | null;
+  activeSymbol: string;
+}) {
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2 px-1">
+        <h3 className="text-xs uppercase tracking-wider text-gray-500 flex items-center gap-1.5">
+          <Activity size={12} className="text-blue-400" />
+          Signals log
+          {activeSymbol && (
+            <span className="text-gray-600 font-mono normal-case">· {activeSymbol}</span>
+          )}
+        </h3>
+        <span className="text-[10px] text-gray-500">
+          {signals === null ? '—' : `${signals.length} recent`}
+        </span>
+      </div>
+      <div className="rounded-lg border border-gray-800 bg-gray-900/40 overflow-hidden">
+        {error ? (
+          <p className="p-4 text-xs text-red-300">
+            Signals unavailable ({describeError(error)})
+          </p>
+        ) : signals === null ? (
+          <div className="p-4 space-y-2">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-6 bg-gray-800/40 rounded animate-pulse" />
+            ))}
+          </div>
+        ) : signals.length === 0 ? (
+          <p className="p-4 text-xs text-gray-500">
+            No recent signals on {activeSymbol || 'this symbol'}.
+          </p>
+        ) : (
+          <table className="w-full text-xs">
+            <thead className="bg-gray-900/60 border-b border-gray-800 text-[10px] uppercase tracking-wider text-gray-500">
+              <tr className="text-left">
+                <th className="px-3 py-2 font-medium">Time</th>
+                <th className="px-3 py-2 font-medium">Side</th>
+                <th className="px-3 py-2 font-medium">Pattern</th>
+                <th className="px-3 py-2 font-medium text-right">Price</th>
+                <th className="px-3 py-2 font-medium text-right">Confidence</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800">
+              {signals.slice(0, 50).map((s) => {
+                const short = (s.side ?? '').toLowerCase() === 'sell' || (s.side ?? '').toLowerCase() === 'short';
+                return (
+                  <tr key={s.id} className="hover:bg-gray-800/30">
+                    <td className="px-3 py-2 text-gray-400 tabular-nums whitespace-nowrap">
+                      {fmtRelative(s.timestamp)}
+                    </td>
+                    <td className="px-3 py-2">
+                      <span
+                        className={cn(
+                          'inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase',
+                          short
+                            ? 'bg-red-500/15 text-red-300'
+                            : 'bg-emerald-500/15 text-emerald-300',
+                        )}
+                      >
+                        {short ? 'sell' : 'buy'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-gray-300 truncate max-w-[14rem]">
+                      {s.pattern ?? <span className="text-gray-600">—</span>}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-gray-200">
+                      {s.price !== null && s.price !== undefined ? fmtPrice(s.price) : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono tabular-nums text-gray-300">
+                      {s.confidence !== null && s.confidence !== undefined
+                        ? `${(s.confidence * 100).toFixed(0)}%`
+                        : '—'}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </section>
   );
 }
 
