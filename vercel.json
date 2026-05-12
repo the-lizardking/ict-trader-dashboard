@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/bot/:path*", "destination": "https://featured-thunder-bio-lucia.trycloudflare.com/api/bot/:path*" },
+    { "source": "/api/bot/:path*", "destination": "https://arch-divorce-wales-refresh.trycloudflare.com/api/bot/:path*" },
     { "source": "/(.*)", "destination": "/" }
   ]
 }
