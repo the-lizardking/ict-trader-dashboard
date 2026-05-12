@@ -1,6 +1,6 @@
 {
   "rewrites": [
-    { "source": "/api/bot/:path*", "destination": "https://arch-divorce-wales-refresh.trycloudflare.com/api/bot/:path*" },
+    { "source": "/api/bot/:path*", "destination": "https://c0ff9d8d-0d78-4a0b-b7d1-4d9e1cba830c.cfargotunnel.com/api/bot/:path*" },
     { "source": "/(.*)", "destination": "/" }
   ]
 }
