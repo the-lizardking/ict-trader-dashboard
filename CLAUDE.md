@@ -1,5 +1,91 @@
 # ICT Trader Dashboard — CLAUDE.md
 
+## Streamlit migration (adopted 2026-05-12)
+
+**Decision:** the dashboard is being rebuilt as a Streamlit app hosted
+on Streamlit Community Cloud. Operator-driven decision after multiple
+consecutive incidents where the Vercel-fronted Vite app stopped
+resolving live data. The Streamlit entry point is `streamlit_app.py`
+at the repo root; deploy steps in [`README.md`](./README.md).
+
+### Why a server-rendered Python app (not React + Vercel)
+
+The dashboard is read-only — a browser tab that polls the bot's
+FastAPI. The transport architecture between Vercel and the VM has
+consumed an outsize fraction of the project's time. Concretely:
+
+| When | PR | What | Outcome |
+|---|---|---|---|
+| 2026-05-07 | #2 | `vercel.json` rewrite `/api/bot/*` → `http://158.178.210.252:8001` (direct) | Worked for 3 days |
+| 2026-05-10 | #22 | Vercel Hobby stopped honouring plain-HTTP destinations. Switched to a Cloudflare quick tunnel | Worked but tunnel URL rotates on every cloudflared restart |
+| 2026-05-10 | #23 | Tried a Vercel Edge Function (server-side proxy) | Failed — Vercel Hobby applies the HTTP-outbound block to user functions too |
+| 2026-05-10 | #25 | Reverted Edge Function, back to CF quick tunnel | Worked |
+| 2026-05-10 | (cf-worker) | Tried a Cloudflare Worker at `*.workers.dev` proxying to the raw IP | Failed — CF error 1003: Workers can't fetch raw IPv4 either. Retired; `cf-worker/` directory in `ict-trading-bot` kept as historical record |
+| 2026-05-11 | #29 | Quick-tunnel URL rotated; emergency vercel.json patch | Worked until next rotation |
+| 2026-05-12 | #30 | Quick-tunnel URL rotated **again**; another emergency patch | Worked until next rotation |
+| 2026-05-12 | #31 | **Named** CF tunnel at `c0ff9d8d-…cfargotunnel.com` + `ict-cloudflared-tunnel.service` (`Restart=always`) on the VM | Stable, but adds a cloudflared daemon, a CF account dependency, and a CNAME-ish hostname Vercel rewrites to |
+
+Full evidence: [`ict-trading-bot/docs/audit/vercel-edge-vs-cf-worker.md`](https://github.com/benbaichmankass/ict-trading-bot/blob/main/docs/audit/vercel-edge-vs-cf-worker.md).
+
+The fundamental constraint is that Vercel Hobby blocks plain-HTTP
+outbound from rewrites *and* from user functions, and we don't have a
+Vercel-Pro budget ($20+/user/mo) or a CF zone (which would unlock a
+free named-tunnel CNAME). Every working architecture therefore
+required a tunnel layer between Vercel and the VM. That tunnel layer
+has been the source of every production outage since 2026-05-10.
+
+**Streamlit removes the constraint.** The dashboard is rendered by a
+Python process on Streamlit Community Cloud (free, ≤1 GB RAM,
+auto-redeploys from `main`). The browser only sees Streamlit's HTTPS
+endpoint, so there is no mixed-content block; the Python process
+makes the upstream call to `http://158.178.210.252:8001` directly.
+No tunnel, no worker, no rewrite, no V8-isolate proxy. The list of
+things that can break the dashboard collapses to: Streamlit Cloud
+being down, the VM's FastAPI being down, or this script's code.
+
+### Migration plan
+
+1. **Now (this PR):** ship `streamlit_app.py` + `requirements.txt` +
+   `.streamlit/config.toml` on the simplification branch. Operator
+   deploys it on share.streamlit.io. The React app remains alongside
+   as a fallback.
+2. **+24h** after Streamlit is verified live and stable: retire the
+   React app and `vercel.json`. Retire the `cf-worker/` directory in
+   `ict-trading-bot`. Retire `ict-cloudflared-tunnel.service` on the
+   VM (via the existing `teardown-cloudflare-tunnel` operator action).
+3. **+1 week:** delete the React app source (`src/`, `index.html`,
+   `vite.config.ts`, `tsconfig.json`, `package.json`,
+   `package-lock.json`) in a cleanup PR.
+
+### Feature-scope tradeoff (explicit)
+
+The first Streamlit cut covers **Overview** (stats + VM health + 30d
+PnL line chart), **Positions**, **Signals**, **Closed trades**,
+**Logs**, and **Health** (systemd services + latest snapshot).
+
+It does **not** carry over (yet): the TradingView candle chart with
+Bybit-WS per-tick updates, Backtests, Models / ShadowModels (ML
+drift charts), LiquidityMaps, TimePrice (killzone heatmap),
+TradeProcess, Settings (config view), or the Gemini AI analysis.
+Those can be ported back if needed, but the operator's priority is
+stable + transparent over rich; rich-but-fragile is what got us into
+the transport-layer rabbit hole.
+
+### What still applies from the rest of this file
+
+- The "Bot-side authority split" note below (the dashboard is still a
+  pure read-only consumer; nothing changes there).
+- The API contract (the Streamlit app consumes the same FastAPI
+  endpoints).
+- The "Hard limit" on operator-gated actions (FORCED STOP, model
+  promotion) — those still belong on the bot side, not the dashboard.
+- The Vercel-specific sections lower down (`vercel.json` rewrites,
+  `VITE_BOT_API_URL`, CI typecheck) describe the **legacy**
+  architecture and remain accurate for the React app while it's still
+  deployed. They will be removed in the cleanup PR.
+
+---
+
 ## Bot-side authority split (consumer note, adopted 2026-05-11)
 
 The dashboard is a **pure read-only consumer** of the bot's REST
@@ -24,12 +110,12 @@ dashboard. The dashboard PR is autonomous; the bot-side endpoint
 that takes the action is Tier-3 per
 [`vm-operator-mode.md`](https://github.com/benbaichmankass/ict-trading-bot/blob/main/docs/claude/vm-operator-mode.md). Don't ship the dashboard button before the bot endpoint is approved.
 
-## Project Overview
+## Project Overview (legacy React app)
 React 19 + Vite + Tailwind CSS v4 SPA deployed on Vercel.
 Calls the ICT Trading Bot's FastAPI (`ict-trading-bot`) REST API for live data.
 No server-side code — pure static build.
 
-## Architecture
+## Architecture (legacy)
 ```
 Browser (Vercel)
   → HTTPS → Vercel edge → rewrite → HTTP → Bot FastAPI (VPS :8001)
@@ -72,12 +158,15 @@ and makes CORS irrelevant (every dashboard request is same-origin).
 
 `vercel.json` declares two rewrites, in order:
 
-1. `/api/bot/:path*` → `http://158.178.210.252:8001/api/bot/:path*` — proxies dashboard API calls to the bot VPS. Vercel terminates TLS at its edge then makes the upstream HTTP request, so the browser never sees mixed content.
+1. `/api/bot/:path*` → `https://c0ff9d8d-0d78-4a0b-b7d1-4d9e1cba830c.cfargotunnel.com/api/bot/:path*` — proxies dashboard API calls to the bot VPS via the named Cloudflare tunnel (PR #31). Vercel terminates TLS at its edge; cloudflared on the VM tunnels back to `127.0.0.1:8001`.
 2. `/(.*)` → `/` — SPA catch-all for client-side routing.
 
 Order matters. The API rewrite must come first; otherwise the catch-all eats every request and rewrites it to `/`.
 
-If the bot VPS IP changes, update the destination in `vercel.json` and redeploy. If the bot eventually moves behind a real HTTPS endpoint, drop the rewrite and set `VITE_BOT_API_URL` to the new HTTPS URL.
+If the bot VPS IP changes, the named tunnel hostname stays stable —
+no `vercel.json` change required. If the bot eventually moves behind
+a real HTTPS endpoint, drop the rewrite and set `VITE_BOT_API_URL`
+to the new HTTPS URL.
 
 ## Development
 ```bash
@@ -103,7 +192,10 @@ Local dev does NOT use the Vercel rewrite. Either run the bot locally on `:8001`
 
 ## File Structure
 ```
-src/
+streamlit_app.py        — NEW: minimal Streamlit dashboard (current architecture)
+requirements.txt        — NEW: Python deps for Streamlit Cloud
+.streamlit/config.toml  — NEW: Streamlit theme + privacy config
+src/                    — LEGACY: React app (kept as fallback until Streamlit verified)
   components/
     Dashboard.tsx        — main layout, tab routing, polling loop, header, collapsible/mobile sidebar, modals, connection banners (allFailed vs partial)
     StatsGrid.tsx        — 4 metric cards (PnL, orders, status, infra)

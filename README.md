@@ -1,58 +1,68 @@
 # ICT Trader Dashboard
 
-Live trading dashboard for the ICT Trading Bot. Built with React 19 + Vite + Tailwind CSS v4, deployed on Vercel.
+Read-only live dashboard for the ICT Trading Bot's FastAPI on the VPS.
 
-## Features
-
-- **Live metrics** — 24h PnL, open trades, win rate, VM health (CPU/RAM/disk)
-- **Equity curve** — area chart of account equity over time
-- **ICT strategy monitor** — active/paused status of running strategies
-- **Live log feed** — terminal-style feed of bot events with level badges
-- **AI Analysis** — Gemini-powered ICT market analysis from recent log data
-
-## Architecture
+## Current architecture (Streamlit, May 2026)
 
 ```
-Vercel (SPA) ──HTTPS──▶ VPS FastAPI :8001
-                          /api/bot/stats
-                          /api/bot/logs
-                          /api/bot/positions
-                          /api/bot/signals
+Browser ──HTTPS──▶ Streamlit Community Cloud ──HTTP──▶ VPS FastAPI :8001
+                   (Python server, free tier)         (158.178.210.252)
 ```
 
-No SSH tunneling. No Express server. Pure static build calling the bot's public REST API.
+The Streamlit Python server makes the upstream call directly. The
+browser only sees Streamlit's HTTPS-rendered page, so there is no
+mixed-content block. **No Cloudflare tunnel, no Vercel rewrite, no
+transport-layer moving parts.**
 
-## Setup
+### Deploy on Streamlit Community Cloud (one-time, operator)
+
+1. Push this repo to GitHub (already done if you're reading this).
+2. Sign into <https://share.streamlit.io> with the operator's GitHub account.
+3. Click **New app** → pick `benbaichmankass/ict-trader-dashboard`
+   → branch `main` → main file `streamlit_app.py` → **Deploy**.
+4. Streamlit Cloud auto-redeploys on every push to `main`.
+
+Optional: set `BOT_API_URL` in the app's **Settings → Secrets** tab if the
+VPS IP ever changes (e.g. `BOT_API_URL = "http://1.2.3.4:8001"`). The
+default baked into the script is `http://158.178.210.252:8001`.
+
+### Local dev
 
 ```bash
-npm install
-cp .env.example .env
-# Edit .env:
-#   VITE_BOT_API_URL=https://your-vps:8001
-#   GEMINI_API_KEY=your_key
-npm run dev
+pip install -r requirements.txt
+streamlit run streamlit_app.py
+# Override the upstream:
+# BOT_API_URL=http://localhost:8001 streamlit run streamlit_app.py
 ```
 
-## Vercel Deployment
+### Tabs
 
-1. Push to GitHub
-2. Import repo in Vercel dashboard
-3. Add environment variables:
-   - `VITE_BOT_API_URL` — bot API public URL (no trailing slash)
-   - `GEMINI_API_KEY` — Google AI Studio key
-4. Deploy — `vercel.json` handles SPA routing automatically
+| Tab | Endpoint(s) |
+|---|---|
+| Overview | `/api/bot/stats`, `/api/pnl/history?days=30` |
+| Positions | `/api/bot/positions` |
+| Signals | `/api/bot/signals` |
+| Closed trades | `/api/bot/trades/closed?limit=50` |
+| Logs | `/api/bot/logs` |
+| Health | `/api/bot/health/services`, `/api/bot/health/latest` |
 
-## Bot API Setup
+Full API contract: [`ict-trading-bot/CLAUDE.md`](https://github.com/benbaichmankass/ict-trading-bot/blob/main/CLAUDE.md) § Dashboard REST API.
 
-The `ict-trading-bot` repo exposes the required endpoints via FastAPI on port 8001.
-On the VPS, set in the systemd service environment:
+## Legacy architecture (React + Vite + Vercel)
 
-```
-DASHBOARD_ORIGIN=https://your-vercel-app.vercel.app
-```
+The React app is still in the repo (`src/`, `vercel.json`, `index.html`,
+`vite.config.ts`, `package.json`) and still deployed on Vercel as a
+fallback. It calls the bot API via Vercel's rewrite → Cloudflare named
+tunnel → VPS FastAPI. Once the Streamlit dashboard has been verified
+stable in production for ~24h, the following can be retired in a cleanup
+PR:
 
-This enables CORS for the Vercel domain.
+- the React source (`src/`, `index.html`, `vite.config.ts`, `tsconfig.json`)
+- `package.json` and `package-lock.json`
+- `vercel.json`
+- the `cf-worker/` directory in `ict-trading-bot`
+- `ict-cloudflared-tunnel.service` on the VM (via the existing
+  `teardown-cloudflare-tunnel` operator action)
 
-## Related
-
-- [ict-trading-bot](https://github.com/benbaichmankass/ict-trading-bot) — Python trading bot + FastAPI data feed
+Why the migration: see [`CLAUDE.md`](./CLAUDE.md) § "Streamlit migration
+(adopted 2026-05-12)".
