@@ -1,7 +1,19 @@
-node_modules/
-dist/
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Env
 .env
 .env.local
 .env.*.local
-*.log
+
+# OS
 .DS_Store
+*.log

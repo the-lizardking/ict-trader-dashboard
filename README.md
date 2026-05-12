@@ -1,32 +1,32 @@
 # ICT Trader Dashboard
 
 Read-only live dashboard for the ICT Trading Bot's FastAPI on the VPS.
+Server-rendered Streamlit app on Streamlit Community Cloud (free).
 
-## Current architecture (Streamlit, May 2026)
+## Architecture
 
 ```
 Browser ──HTTPS──▶ Streamlit Community Cloud ──HTTP──▶ VPS FastAPI :8001
                    (Python server, free tier)         (158.178.210.252)
 ```
 
-The Streamlit Python server makes the upstream call directly. The
-browser only sees Streamlit's HTTPS-rendered page, so there is no
-mixed-content block. **No Cloudflare tunnel, no Vercel rewrite, no
-transport-layer moving parts.**
+The Python server makes the upstream call directly. No browser
+mixed-content block, no Cloudflare tunnel, no Vercel rewrite, no
+transport-layer moving parts.
 
-### Deploy on Streamlit Community Cloud (one-time, operator)
+## Deploy on Streamlit Community Cloud (one-time, operator)
 
-1. Push this repo to GitHub (already done if you're reading this).
-2. Sign into <https://share.streamlit.io> with the operator's GitHub account.
-3. Click **New app** → pick `benbaichmankass/ict-trader-dashboard`
-   → branch `main` → main file `streamlit_app.py` → **Deploy**.
+1. Push to `main` (this is your GitHub deploy trigger).
+2. <https://share.streamlit.io> → sign in with the operator's GitHub.
+3. **New app** → `benbaichmankass/ict-trader-dashboard` → branch `main`
+   → main file `streamlit_app.py` → **Deploy**.
 4. Streamlit Cloud auto-redeploys on every push to `main`.
 
-Optional: set `BOT_API_URL` in the app's **Settings → Secrets** tab if the
-VPS IP ever changes (e.g. `BOT_API_URL = "http://1.2.3.4:8001"`). The
-default baked into the script is `http://158.178.210.252:8001`.
+Optional: in the app's **Settings → Secrets** tab, set
+`BOT_API_URL = "http://158.178.210.252:8001"` if the VPS IP ever changes
+(this is the hardcoded default, so you can skip it).
 
-### Local dev
+## Local dev
 
 ```bash
 pip install -r requirements.txt
@@ -35,9 +35,9 @@ streamlit run streamlit_app.py
 # BOT_API_URL=http://localhost:8001 streamlit run streamlit_app.py
 ```
 
-### Tabs
+## Tabs
 
-| Tab | Endpoint(s) |
+| Tab | Endpoints |
 |---|---|
 | Overview | `/api/bot/stats`, `/api/pnl/history?days=30` |
 | Positions | `/api/bot/positions` |
@@ -48,21 +48,16 @@ streamlit run streamlit_app.py
 
 Full API contract: [`ict-trading-bot/CLAUDE.md`](https://github.com/benbaichmankass/ict-trading-bot/blob/main/CLAUDE.md) § Dashboard REST API.
 
-## Legacy architecture (React + Vite + Vercel)
+## Why not React + Vercel
 
-The React app is still in the repo (`src/`, `vercel.json`, `index.html`,
-`vite.config.ts`, `package.json`) and still deployed on Vercel as a
-fallback. It calls the bot API via Vercel's rewrite → Cloudflare named
-tunnel → VPS FastAPI. Once the Streamlit dashboard has been verified
-stable in production for ~24h, the following can be retired in a cleanup
-PR:
+The dashboard was a Vite/React SPA on Vercel for its first 5 days. Five
+different transport architectures (direct HTTP, Vercel Edge Function,
+Cloudflare Worker, CF quick tunnel, named CF tunnel) were all tried
+because Vercel Hobby blocks plain-HTTP outbound from rewrites and from
+user functions. The Streamlit pivot eliminates the entire problem.
+Full rationale: [`CLAUDE.md`](./CLAUDE.md) § "Why not React + Vercel"
+and [the audit doc in the bot repo](https://github.com/benbaichmankass/ict-trading-bot/blob/main/docs/audit/vercel-edge-vs-cf-worker.md).
 
-- the React source (`src/`, `index.html`, `vite.config.ts`, `tsconfig.json`)
-- `package.json` and `package-lock.json`
-- `vercel.json`
-- the `cf-worker/` directory in `ict-trading-bot`
-- `ict-cloudflared-tunnel.service` on the VM (via the existing
-  `teardown-cloudflare-tunnel` operator action)
-
-Why the migration: see [`CLAUDE.md`](./CLAUDE.md) § "Streamlit migration
-(adopted 2026-05-12)".
+**Do not reintroduce React + Vercel for this dashboard.** If a future
+feature needs a richer UI, see CLAUDE.md for the alternatives to
+consider first.
