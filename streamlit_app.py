@@ -54,8 +54,6 @@ _TV_RED    = "#ef5350"
 _TV_TEXT   = "#b2b5be"
 _TV_EMA20  = "#f5a623"
 _TV_EMA50  = "#9b59b6"
-_TV_SIGNAL_LONG  = "#26a69a"
-_TV_SIGNAL_SHORT = "#ef5350"
 _TV_ENTRY  = "#3d7aed"
 
 _CHART_CONFIG = {
@@ -264,10 +262,10 @@ def page_chart() -> None:
         interval = st.selectbox("Interval", CHART_INTERVALS, index=2)
 
     t1, t2, t3, t4 = st.columns(4)
-    show_ema20    = t1.toggle("EMA 20",   value=True)
-    show_ema50    = t2.toggle("EMA 50",   value=True)
-    show_signals  = t3.toggle("Signals",  value=False)
-    show_trades   = t4.toggle("Trades",   value=False)
+    show_ema20   = t1.toggle("EMA 20",  value=True)
+    show_ema50   = t2.toggle("EMA 50",  value=True)
+    show_signals = t3.toggle("Signals", value=False)
+    show_trades  = t4.toggle("Trades",  value=False)
 
     # ── Fetch candles ─────────────────────────────────────────────
     df, candles_err = _fetch_candles(symbol, interval)
@@ -278,7 +276,6 @@ def page_chart() -> None:
         st.caption("No candle data.")
         return
 
-    # Derived series
     df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
     df["ema50"] = df["close"].ewm(span=50, adjust=False).mean()
     vol_colors = [
@@ -304,7 +301,6 @@ def page_chart() -> None:
         decreasing=dict(line=dict(color=_TV_RED,   width=1), fillcolor=_TV_RED),
     ), row=1, col=1)
 
-    # EMA lines
     if show_ema20:
         fig.add_trace(go.Scatter(
             x=df["timestamp"], y=df["ema20"],
@@ -321,63 +317,109 @@ def page_chart() -> None:
             hovertemplate="EMA 50: %{y:.4g}<extra></extra>",
         ), row=1, col=1)
 
-    # Signals layer
+    # ── Signals layer ──────────────────────────────────────────────
+    # API shape: {timestamp, symbol, side ("buy"/"sell"), price, pattern, confidence}
     if show_signals:
-        signals, _ = _fetch("/api/bot/signals")
-        if signals:
+        signals, sig_err = _fetch("/api/bot/signals")
+        if sig_err:
+            st.caption(f"Signals: {sig_err}")
+        elif signals:
             sdf = pd.DataFrame(signals)
             if "symbol" in sdf.columns:
                 sdf = sdf[sdf["symbol"] == symbol]
             if not sdf.empty and "timestamp" in sdf.columns:
-                sdf["timestamp"] = pd.to_datetime(sdf["timestamp"])
+                sdf["timestamp"] = pd.to_datetime(sdf["timestamp"], errors="coerce", utc=True)
+                sdf["timestamp"] = sdf["timestamp"].dt.tz_localize(None)
+                sdf = sdf.dropna(subset=["timestamp"])
+            if not sdf.empty:
                 last_price = float(df["close"].iloc[-1])
-                for direction, marker_sym, color, label in [
-                    ("LONG",  "triangle-up",   _TV_SIGNAL_LONG,  "Long signal"),
-                    ("SHORT", "triangle-down",  _TV_SIGNAL_SHORT, "Short signal"),
+                for side_val, marker_sym, color, label in [
+                    ("buy",  "triangle-up",   _TV_GREEN, "Long"),
+                    ("sell", "triangle-down",  _TV_RED,   "Short"),
                 ]:
-                    subset = (
-                        sdf[sdf["direction"] == direction]
-                        if "direction" in sdf.columns else pd.DataFrame()
-                    )
+                    subset = sdf[sdf["side"] == side_val] if "side" in sdf.columns else pd.DataFrame()
                     if not subset.empty:
+                        prices = (
+                            subset["price"].fillna(last_price)
+                            if "price" in subset.columns
+                            else pd.Series([last_price] * len(subset))
+                        )
+                        hover = (
+                            subset["pattern"].fillna("").astype(str)
+                            if "pattern" in subset.columns
+                            else pd.Series([""] * len(subset))
+                        )
                         fig.add_trace(go.Scatter(
                             x=subset["timestamp"],
-                            y=subset["price"] if "price" in subset.columns
-                              else [last_price] * len(subset),
-                            mode="markers", name=label,
-                            marker=dict(symbol=marker_sym, size=14, color=color,
-                                        line=dict(width=1, color="white")),
+                            y=prices,
+                            mode="markers",
+                            name=label,
+                            text=hover,
+                            marker=dict(
+                                symbol=marker_sym, size=14, color=color,
+                                line=dict(width=1, color="white"),
+                            ),
+                            hovertemplate=f"{label} %{{text}}: %{{y:.4g}}<extra></extra>",
                         ), row=1, col=1)
 
-    # Trades layer
+    # ── Trades layer ───────────────────────────────────────────────
+    # API shape: {openedAt, closedAt, entryPrice, exitPrice, realizedPnl,
+    #             side ("buy"/"sell"), symbol, closeReason, qty}
     if show_trades:
-        trades, _ = _fetch(f"/api/bot/trades/closed?limit={DEFAULT_LIMIT}")
-        if trades:
+        trades, tr_err = _fetch(f"/api/bot/trades/closed?limit={DEFAULT_LIMIT}")
+        if tr_err:
+            st.caption(f"Trades: {tr_err}")
+        elif trades:
             tdf = pd.DataFrame(trades)
             if "symbol" in tdf.columns:
                 tdf = tdf[tdf["symbol"] == symbol]
+
             if not tdf.empty:
                 pnl_col = "realizedPnl" if "realizedPnl" in tdf.columns else None
-                if "openTime" in tdf.columns and "entryPrice" in tdf.columns:
-                    tdf["openTime"] = pd.to_datetime(tdf["openTime"])
-                    fig.add_trace(go.Scatter(
-                        x=tdf["openTime"], y=tdf["entryPrice"],
-                        mode="markers", name="Entry",
-                        marker=dict(symbol="circle", size=9, color=_TV_ENTRY,
-                                    line=dict(width=1, color="white")),
-                    ), row=1, col=1)
-                if "closeTime" in tdf.columns and "exitPrice" in tdf.columns:
-                    tdf["closeTime"] = pd.to_datetime(tdf["closeTime"])
-                    exit_colors = [
-                        _TV_GREEN if (pnl_col and row.get(pnl_col, 0) > 0) else _TV_RED
-                        for _, row in tdf.iterrows()
-                    ]
-                    fig.add_trace(go.Scatter(
-                        x=tdf["closeTime"], y=tdf["exitPrice"],
-                        mode="markers", name="Exit",
-                        marker=dict(symbol="x", size=10, color=exit_colors,
-                                    line=dict(width=2)),
-                    ), row=1, col=1)
+
+                # Entry markers
+                if "openedAt" in tdf.columns and "entryPrice" in tdf.columns:
+                    tdf["openedAt"] = pd.to_datetime(tdf["openedAt"], errors="coerce", utc=True)
+                    tdf["openedAt"] = tdf["openedAt"].dt.tz_localize(None)
+                    sub = tdf.dropna(subset=["openedAt", "entryPrice"])
+                    if not sub.empty:
+                        close_reasons = sub["closeReason"].fillna("") if "closeReason" in sub.columns else pd.Series([""] * len(sub))
+                        fig.add_trace(go.Scatter(
+                            x=sub["openedAt"],
+                            y=sub["entryPrice"],
+                            mode="markers",
+                            name="Entry",
+                            text=close_reasons,
+                            marker=dict(
+                                symbol="circle", size=9, color=_TV_ENTRY,
+                                line=dict(width=1, color="white"),
+                            ),
+                            hovertemplate="Entry: %{y:.4g}<extra></extra>",
+                        ), row=1, col=1)
+
+                # Exit markers
+                if "closedAt" in tdf.columns and "exitPrice" in tdf.columns:
+                    tdf["closedAt"] = pd.to_datetime(tdf["closedAt"], errors="coerce", utc=True)
+                    tdf["closedAt"] = tdf["closedAt"].dt.tz_localize(None)
+                    sub = tdf.dropna(subset=["closedAt", "exitPrice"])
+                    if not sub.empty:
+                        exit_colors = [
+                            _TV_GREEN if (pnl_col and (row.get(pnl_col) or 0) > 0) else _TV_RED
+                            for _, row in sub.iterrows()
+                        ]
+                        reasons = sub["closeReason"].fillna("") if "closeReason" in sub.columns else pd.Series([""] * len(sub))
+                        fig.add_trace(go.Scatter(
+                            x=sub["closedAt"],
+                            y=sub["exitPrice"],
+                            mode="markers",
+                            name="Exit",
+                            text=reasons,
+                            marker=dict(
+                                symbol="x", size=10, color=exit_colors,
+                                line=dict(width=2),
+                            ),
+                            hovertemplate="Exit (%{text}): %{y:.4g}<extra></extra>",
+                        ), row=1, col=1)
 
     # Volume bars
     fig.add_trace(go.Bar(
@@ -419,7 +461,6 @@ def page_chart() -> None:
         ),
     )
 
-    # Price axis on the right (row 1), volume axis (row 2)
     fig.update_xaxes(**_axis)
     fig.update_yaxes(**_axis)
     fig.update_yaxes(side="right", row=1, col=1)
@@ -614,10 +655,10 @@ def page_backtesting() -> None:
     st.subheader("Summary")
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total runs", len(df))
-    m2.metric("Avg win rate",     fmt_pct(df["winRate"].mean()      if "winRate"      in df else None))
-    m3.metric("Avg profit factor",f"{df['profitFactor'].mean():.2f}" if "profitFactor" in df else "—")
-    m4.metric("Best PnL",   fmt_usd(df["totalPnl"].max() if "totalPnl" in df else None))
-    m5.metric("Worst PnL",  fmt_usd(df["totalPnl"].min() if "totalPnl" in df else None))
+    m2.metric("Avg win rate",      fmt_pct(df["winRate"].mean()       if "winRate"      in df else None))
+    m3.metric("Avg profit factor", f"{df['profitFactor'].mean():.2f}" if "profitFactor" in df else "—")
+    m4.metric("Best PnL",  fmt_usd(df["totalPnl"].max() if "totalPnl" in df else None))
+    m5.metric("Worst PnL", fmt_usd(df["totalPnl"].min() if "totalPnl" in df else None))
 
     if {"winRate", "runDate"}.issubset(df.columns):
         st.subheader("Win Rate Over Runs")
@@ -659,9 +700,9 @@ def page_backtesting() -> None:
         if selected_id:
             row = df[df["id"] == selected_id].iloc[0].to_dict()
             d1, d2, d3, d4 = st.columns(4)
-            d1.metric("Total Trades", row.get("totalTrades", "—"))
-            d2.metric("Win Rate",     fmt_pct(row.get("winRate")))
-            d3.metric("Total PnL",   fmt_usd(row.get("totalPnl")))
+            d1.metric("Total Trades",  row.get("totalTrades", "—"))
+            d2.metric("Win Rate",      fmt_pct(row.get("winRate")))
+            d3.metric("Total PnL",    fmt_usd(row.get("totalPnl")))
             d4.metric("Profit Factor", f"{row.get('profitFactor', 0):.2f}")
             d5, d6, d7, d8 = st.columns(4)
             d5.metric("Winning",    row.get("winningTrades", "—"))
