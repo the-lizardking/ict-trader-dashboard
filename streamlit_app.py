@@ -12,18 +12,38 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import time
 from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
+import yfinance as yf
 
 BOT_API = os.environ.get("BOT_API_URL", "http://158.178.210.252:8001")
 TIMEOUT_S = 10.0
 POLL_INTERVAL_S = 10
 DEFAULT_LIMIT = 50
+
+# Yahoo Finance ticker mapping (dashboard uses BTCUSDT style for signal matching)
+_YF_SYMBOL: dict[str, str] = {
+    "BTCUSDT": "BTC-USD",
+    "ETHUSDT": "ETH-USD",
+    "SOLUSDT": "SOL-USD",
+    "BNBUSDT": "BNB-USD",
+    "XRPUSDT": "XRP-USD",
+}
+
+# yfinance interval + download period that yields ~200 bars per interval label
+_YF_PARAMS: dict[str, dict] = {
+    "1m":  {"interval": "1m",  "period": "1d"},
+    "5m":  {"interval": "5m",  "period": "5d"},
+    "15m": {"interval": "15m", "period": "20d"},
+    "1h":  {"interval": "1h",  "period": "30d"},
+    "4h":  {"interval": "1h",  "period": "60d"},   # resampled after fetch
+    "1d":  {"interval": "1d",  "period": "2y"},
+}
 
 st.set_page_config(
     page_title="ICT Trader",
@@ -32,35 +52,27 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Midnight blue overrides on top of the base dark theme from config.toml
-st.markdown("""
+st.html("""
 <style>
-  /* Sidebar gradient */
   [data-testid="stSidebar"] {
       background: linear-gradient(180deg, #050c1a 0%, #091428 100%);
       border-right: 1px solid #182040;
   }
-  /* Tighter sidebar radio options */
   [data-testid="stSidebar"] .stRadio > div { gap: 2px; }
   [data-testid="stSidebar"] .stRadio label { padding: 6px 8px; border-radius: 6px; }
   [data-testid="stSidebar"] .stRadio label:hover { background: #182040; }
-  /* Metric card styling */
   [data-testid="stMetric"] {
       background: #0d1628;
       border: 1px solid #1a2840;
       border-radius: 8px;
       padding: 0.6rem 0.8rem;
   }
-  /* Narrow top padding on main area */
   .main .block-container { padding-top: 1.2rem; }
-  /* Full-width single column on small screens */
   @media (max-width: 640px) {
       [data-testid="column"] { min-width: 100% !important; }
   }
 </style>
-""", unsafe_allow_html=True)
-
-st_autorefresh(interval=POLL_INTERVAL_S * 1000, key="poll_tick")
+""")
 
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
@@ -81,6 +93,54 @@ def _fetch(path: str) -> tuple[Any, str | None]:
         return None, f"Network error on {path}: {e}"
     except ValueError as e:
         return None, f"Bad JSON from {path}: {e}"
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_candles(
+    symbol: str, interval: str, limit: int = 200
+) -> tuple[pd.DataFrame | None, str | None]:
+    """Fetch OHLCV from Yahoo Finance — no auth, no geo-restrictions."""
+    try:
+        params = _YF_PARAMS.get(interval, _YF_PARAMS["15m"])
+        yf_symbol = _YF_SYMBOL.get(symbol, symbol.replace("USDT", "-USD"))
+
+        raw = yf.download(
+            yf_symbol,
+            period=params["period"],
+            interval=params["interval"],
+            progress=False,
+            auto_adjust=True,
+        )
+        if raw.empty:
+            return None, f"No data returned for {yf_symbol}"
+
+        # Flatten MultiIndex columns produced by some yfinance versions
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = raw.columns.get_level_values(0)
+
+        if interval == "4h":
+            raw = raw.resample("4h").agg({
+                "Open": "first", "High": "max",
+                "Low": "min", "Close": "last", "Volume": "sum",
+            }).dropna()
+
+        raw = raw.tail(limit)
+        # Strip timezone so Plotly doesn't add UTC offset labels
+        ts = raw.index
+        if hasattr(ts, "tz") and ts.tz is not None:
+            ts = ts.tz_convert("UTC").tz_localize(None)
+
+        df = pd.DataFrame({
+            "timestamp": ts,
+            "open":   raw["Open"].to_numpy(),
+            "high":   raw["High"].to_numpy(),
+            "low":    raw["Low"].to_numpy(),
+            "close":  raw["Close"].to_numpy(),
+            "volume": raw["Volume"].to_numpy(),
+        })
+        return df, None
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Candle fetch error: {exc}"
 
 
 def fmt_pct(x: float | None) -> str:
@@ -187,80 +247,143 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 
 # ── Live Chart ────────────────────────────────────────────────────────────────
 
-def page_chart() -> None:
-    st.header("BTCUSDT Live Chart")
-    candles, candles_err = _fetch("/api/bot/candles/BTCUSDT?limit=100")
-    signals, signals_err = _fetch("/api/bot/signals")
-    positions, positions_err = _fetch("/api/bot/positions")
+CHART_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+CHART_INTERVALS = list(_YF_PARAMS.keys())  # ["1m","5m","15m","1h","4h","1d"]
 
+
+def page_chart() -> None:
+    st.header("Live Chart")
+
+    # ── Controls row ──────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        symbol = st.selectbox("Symbol", CHART_SYMBOLS)
+    with c2:
+        interval = st.selectbox("Interval", CHART_INTERVALS, index=2)  # default 15m
+    with c3:
+        show_signals = st.toggle("Signals", value=True)
+    with c4:
+        show_trades = st.toggle("Trades", value=True)
+
+    # ── Candles (Yahoo Finance) ────────────────────────────────────────
+    df, candles_err = _fetch_candles(symbol, interval)
     if candles_err:
         st.warning(f"Candles unavailable: {candles_err}")
         return
-    if not candles:
-        st.caption("No candle data available.")
+    if df is None or df.empty:
+        st.caption("No candle data.")
         return
-
-    df = pd.DataFrame(candles)
-    if not {"timestamp", "open", "high", "low", "close"}.issubset(df.columns):
-        st.json(candles[:3])
-        return
-
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values("timestamp")
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=df["timestamp"], open=df["open"],
-        high=df["high"], low=df["low"], close=df["close"],
-        name="BTCUSDT",
+        x=df["timestamp"],
+        open=df["open"], high=df["high"],
+        low=df["low"], close=df["close"],
+        name=symbol,
+        increasing_line_color="#22c55e",
+        decreasing_line_color="#ef4444",
     ))
 
-    if not signals_err and signals:
-        sdf = pd.DataFrame(signals)
-        sdf = sdf[sdf["symbol"] == "BTCUSDT"]
-        if not sdf.empty:
-            sdf["timestamp"] = pd.to_datetime(sdf["timestamp"])
-            for _, sig in sdf.iterrows():
-                color = "green" if sig.get("direction") == "LONG" else "red"
-                fig.add_trace(go.Scatter(
-                    x=[sig["timestamp"]],
-                    y=[sig.get("price", df["close"].iloc[-1])],
-                    mode="markers",
-                    marker=dict(
-                        size=10, color=color,
-                        symbol="triangle-up" if sig.get("direction") == "LONG" else "triangle-down",
-                    ),
-                    name=f"Signal: {sig.get('pattern', 'N/A')}",
-                ))
-
-    if not positions_err and positions:
-        pdf = pd.DataFrame(positions)
-        pdf = pdf[pdf["symbol"] == "BTCUSDT"]
-        if not pdf.empty:
-            for _, pos in pdf.iterrows():
-                for level, label, color in [
-                    ("entryPrice", "Entry", "#3d7aed"),
-                    ("stopLoss", "SL", "#ef4444"),
-                    ("takeProfit", "TP", "#22c55e"),
+    # ── Signals layer ──────────────────────────────────────────────
+    if show_signals:
+        signals, _ = _fetch("/api/bot/signals")
+        if signals:
+            sdf = pd.DataFrame(signals)
+            if "symbol" in sdf.columns:
+                sdf = sdf[sdf["symbol"] == symbol]
+            if not sdf.empty and "timestamp" in sdf.columns:
+                sdf["timestamp"] = pd.to_datetime(sdf["timestamp"])
+                last_price = float(df["close"].iloc[-1])
+                for direction, marker_sym, color, label in [
+                    ("LONG", "triangle-up", "#22c55e", "Long signal"),
+                    ("SHORT", "triangle-down", "#ef4444", "Short signal"),
                 ]:
-                    val = pos.get(level)
-                    if val:
-                        fig.add_hline(
-                            y=val, line_dash="dash", line_color=color,
-                            annotation_text=f"{label}: ${val:,.2f}",
-                        )
+                    subset = (
+                        sdf[sdf["direction"] == direction]
+                        if "direction" in sdf.columns
+                        else pd.DataFrame()
+                    )
+                    if not subset.empty:
+                        fig.add_trace(go.Scatter(
+                            x=subset["timestamp"],
+                            y=subset["price"] if "price" in subset.columns
+                              else [last_price] * len(subset),
+                            mode="markers",
+                            name=label,
+                            marker=dict(
+                                symbol=marker_sym, size=13, color=color,
+                                line=dict(width=1, color="white"),
+                            ),
+                        ))
 
+    # ── Trades layer ───────────────────────────────────────────────
+    if show_trades:
+        trades, _ = _fetch(f"/api/bot/trades/closed?limit={DEFAULT_LIMIT}")
+        if trades:
+            tdf = pd.DataFrame(trades)
+            if "symbol" in tdf.columns:
+                tdf = tdf[tdf["symbol"] == symbol]
+
+            if not tdf.empty:
+                pnl_col = "realizedPnl" if "realizedPnl" in tdf.columns else None
+
+                if "openTime" in tdf.columns and "entryPrice" in tdf.columns:
+                    tdf["openTime"] = pd.to_datetime(tdf["openTime"])
+                    fig.add_trace(go.Scatter(
+                        x=tdf["openTime"], y=tdf["entryPrice"],
+                        mode="markers",
+                        name="Entry",
+                        marker=dict(
+                            symbol="circle", size=9, color="#3d7aed",
+                            line=dict(width=1, color="white"),
+                        ),
+                    ))
+
+                if "closeTime" in tdf.columns and "exitPrice" in tdf.columns:
+                    tdf["closeTime"] = pd.to_datetime(tdf["closeTime"])
+                    exit_colors = [
+                        "#22c55e" if (pnl_col and row.get(pnl_col, 0) > 0) else "#ef4444"
+                        for _, row in tdf.iterrows()
+                    ]
+                    fig.add_trace(go.Scatter(
+                        x=tdf["closeTime"], y=tdf["exitPrice"],
+                        mode="markers",
+                        name="Exit",
+                        marker=dict(
+                            symbol="x", size=10, color=exit_colors,
+                            line=dict(width=2),
+                        ),
+                    ))
+
+                elif "entryPrice" in tdf.columns:
+                    for _, trade in tdf.iterrows():
+                        entry = trade.get("entryPrice")
+                        exit_p = trade.get("exitPrice")
+                        won = pnl_col and (trade.get(pnl_col) or 0) > 0
+                        if entry:
+                            fig.add_hline(y=entry, line_dash="dot",
+                                          line_color="#3d7aed", opacity=0.4)
+                        if exit_p:
+                            fig.add_hline(
+                                y=exit_p, line_dash="dot", opacity=0.4,
+                                line_color="#22c55e" if won else "#ef4444",
+                            )
+
+    # ── Layout ──────────────────────────────────────────────────────
     fig.update_layout(
         template="plotly_dark",
         plot_bgcolor="#060c1a",
         paper_bgcolor="#060c1a",
         hovermode="x unified",
-        height=600,
-        margin=dict(l=0, r=0, t=20, b=0),
+        height=620,
+        margin=dict(l=0, r=0, t=30, b=0),
         xaxis_title="Time",
         yaxis_title="Price (USD)",
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", y=1.04, x=0),
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Source: Yahoo Finance · {symbol} {interval} · up to 200 candles")
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────
@@ -320,7 +443,6 @@ _STAGE_ICON = {
 def page_models() -> None:
     st.header("Models & Training")
 
-    # ── Active VM trainer sessions ────────────────────────────────────────
     st.subheader("VM Trainer Sessions")
     sessions, sessions_err = _fetch("/api/bot/ml/sessions")
 
@@ -381,7 +503,6 @@ def page_models() -> None:
 
     st.divider()
 
-    # ── Model registry ────────────────────────────────────────────────────
     st.subheader("Model Registry")
     registry, registry_err = _fetch("/api/bot/ml/registry")
 
@@ -456,7 +577,6 @@ def page_backtesting() -> None:
 
     df = pd.DataFrame(rows)
 
-    # ── Summary strip ────────────────────────────────────────────────────
     st.subheader("Summary")
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total runs", len(df))
@@ -471,7 +591,6 @@ def page_backtesting() -> None:
     m4.metric("Best PnL", fmt_usd(df["totalPnl"].max() if "totalPnl" in df else None))
     m5.metric("Worst PnL", fmt_usd(df["totalPnl"].min() if "totalPnl" in df else None))
 
-    # ── Win-rate trend ───────────────────────────────────────────────────
     if {"winRate", "runDate"}.issubset(df.columns):
         st.subheader("Win Rate Over Runs")
         chart_df = df[["runDate", "winRate", "totalPnl"]].sort_values("runDate")
@@ -507,7 +626,6 @@ def page_backtesting() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── Results table ─────────────────────────────────────────────────────
     st.subheader("All Runs")
     col_map = {
         "id": "ID",
@@ -530,7 +648,6 @@ def page_backtesting() -> None:
         use_container_width=True,
     )
 
-    # ── Per-run drill-down ────────────────────────────────────────────────
     if "id" in df.columns:
         st.subheader("Run Detail")
         selected_id = st.selectbox("Select run ID", df["id"].tolist())
@@ -677,6 +794,9 @@ def main() -> None:
         "Logs": page_logs,
     }
     dispatch.get(page, page_overview)()  # type: ignore[operator]
+
+    time.sleep(POLL_INTERVAL_S)
+    st.rerun()
 
 
 if __name__ == "__main__":
