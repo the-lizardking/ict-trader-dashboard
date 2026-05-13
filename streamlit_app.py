@@ -25,8 +25,14 @@ TIMEOUT_S = 10.0
 POLL_INTERVAL_S = 10
 DEFAULT_LIMIT = 50
 
-# Binance public klines — no API key required
-BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+# Bybit public klines — no API key required, no geo-restrictions
+BYBIT_KLINES_URL = "https://api.bybit.com/v5/market/kline"
+
+# Map display labels to Bybit interval codes
+_BYBIT_INTERVAL: dict[str, str] = {
+    "1m": "1", "5m": "5", "15m": "15",
+    "1h": "60", "4h": "240", "1d": "D",
+}
 
 st.set_page_config(
     page_title="ICT Trader",
@@ -82,28 +88,37 @@ def _fetch(path: str) -> tuple[Any, str | None]:
 def _fetch_candles(
     symbol: str, interval: str, limit: int = 200
 ) -> tuple[pd.DataFrame | None, str | None]:
-    """Fetch OHLCV from Binance public klines endpoint."""
+    """Fetch OHLCV from Bybit public klines (no auth, no geo-block)."""
     try:
         r = requests.get(
-            BINANCE_KLINES_URL,
-            params={"symbol": symbol, "interval": interval, "limit": limit},
+            BYBIT_KLINES_URL,
+            params={
+                "category": "linear",
+                "symbol": symbol,
+                "interval": _BYBIT_INTERVAL.get(interval, "15"),
+                "limit": limit,
+            },
             timeout=10.0,
         )
         r.raise_for_status()
-        cols = [
-            "openTime", "open", "high", "low", "close", "volume",
-            "closeTime", "quoteVolume", "numTrades",
-            "takerBuyBase", "takerBuyQuote", "_",
-        ]
-        df = pd.DataFrame(r.json(), columns=cols)
-        df["timestamp"] = pd.to_datetime(df["openTime"], unit="ms")
+        payload = r.json()
+        if payload.get("retCode") != 0:
+            return None, f"Bybit error: {payload.get('retMsg', 'unknown')}"
+        # result.list = [[startTimeMs, open, high, low, close, volume, turnover], ...]
+        # Bybit returns newest-first; reverse to get chronological order.
+        rows = payload["result"]["list"][::-1]
+        df = pd.DataFrame(
+            rows,
+            columns=["openTime", "open", "high", "low", "close", "volume", "turnover"],
+        )
+        df["timestamp"] = pd.to_datetime(df["openTime"].astype("int64"), unit="ms")
         for col in ("open", "high", "low", "close", "volume"):
             df[col] = pd.to_numeric(df[col])
         return df, None
     except requests.HTTPError as exc:
-        return None, f"HTTP {exc.response.status_code} from Binance"
+        return None, f"HTTP {exc.response.status_code} from Bybit"
     except requests.Timeout:
-        return None, "Timed out fetching candles from Binance"
+        return None, "Timed out fetching candles from Bybit"
     except Exception as exc:  # noqa: BLE001
         return None, f"Candle fetch error: {exc}"
 
@@ -213,7 +228,7 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 # ── Live Chart ────────────────────────────────────────────────────────────────
 
 CHART_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
-CHART_INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"]
+CHART_INTERVALS = list(_BYBIT_INTERVAL.keys())  # ["1m","5m","15m","1h","4h","1d"]
 
 
 def page_chart() -> None:
@@ -230,7 +245,7 @@ def page_chart() -> None:
     with c4:
         show_trades = st.toggle("Trades", value=True)
 
-    # ── Candles (Binance public API) ─────────────────────────────────
+    # ── Candles (Bybit public API) ─────────────────────────────────
     df, candles_err = _fetch_candles(symbol, interval)
     if candles_err:
         st.warning(f"Candles unavailable: {candles_err}")
@@ -263,8 +278,11 @@ def page_chart() -> None:
                     ("LONG", "triangle-up", "#22c55e", "Long signal"),
                     ("SHORT", "triangle-down", "#ef4444", "Short signal"),
                 ]:
-                    subset = sdf[sdf.get("direction", pd.Series(dtype=str)) == direction] \
-                        if "direction" in sdf.columns else pd.DataFrame()
+                    subset = (
+                        sdf[sdf["direction"] == direction]
+                        if "direction" in sdf.columns
+                        else pd.DataFrame()
+                    )
                     if not subset.empty:
                         fig.add_trace(go.Scatter(
                             x=subset["timestamp"],
@@ -272,15 +290,9 @@ def page_chart() -> None:
                               else [last_price] * len(subset),
                             mode="markers",
                             name=label,
-                            marker=dict(symbol=marker_sym, size=13, color=color,
-                                        line=dict(width=1, color="white")),
-                            hovertemplate=(
-                                f"{label}<br>"
-                                "%{x}<br>"
-                                "Price: %{y:,.2f}<br>"
-                                + ("Conf: " + subset["confidence"].astype(str).values[0]
-                                   if "confidence" in subset.columns else "")
-                                + "<extra></extra>"
+                            marker=dict(
+                                symbol=marker_sym, size=13, color=color,
+                                line=dict(width=1, color="white"),
                             ),
                         ))
 
@@ -296,14 +308,15 @@ def page_chart() -> None:
                 pnl_col = "realizedPnl" if "realizedPnl" in tdf.columns else None
 
                 if "openTime" in tdf.columns and "entryPrice" in tdf.columns:
-                    # Full timestamp data — show entry circles
                     tdf["openTime"] = pd.to_datetime(tdf["openTime"])
                     fig.add_trace(go.Scatter(
                         x=tdf["openTime"], y=tdf["entryPrice"],
                         mode="markers",
                         name="Entry",
-                        marker=dict(symbol="circle", size=9, color="#3d7aed",
-                                    line=dict(width=1, color="white")),
+                        marker=dict(
+                            symbol="circle", size=9, color="#3d7aed",
+                            line=dict(width=1, color="white"),
+                        ),
                     ))
 
                 if "closeTime" in tdf.columns and "exitPrice" in tdf.columns:
@@ -316,8 +329,10 @@ def page_chart() -> None:
                         x=tdf["closeTime"], y=tdf["exitPrice"],
                         mode="markers",
                         name="Exit",
-                        marker=dict(symbol="x", size=10, color=exit_colors,
-                                    line=dict(width=2)),
+                        marker=dict(
+                            symbol="x", size=10, color=exit_colors,
+                            line=dict(width=2),
+                        ),
                     ))
 
                 elif "entryPrice" in tdf.columns:
@@ -325,14 +340,15 @@ def page_chart() -> None:
                     for _, trade in tdf.iterrows():
                         entry = trade.get("entryPrice")
                         exit_p = trade.get("exitPrice")
-                        won = (pnl_col and (trade.get(pnl_col) or 0) > 0)
+                        won = pnl_col and (trade.get(pnl_col) or 0) > 0
                         if entry:
                             fig.add_hline(y=entry, line_dash="dot",
                                           line_color="#3d7aed", opacity=0.4)
                         if exit_p:
-                            fig.add_hline(y=exit_p, line_dash="dot",
-                                          line_color="#22c55e" if won else "#ef4444",
-                                          opacity=0.4)
+                            fig.add_hline(
+                                y=exit_p, line_dash="dot", opacity=0.4,
+                                line_color="#22c55e" if won else "#ef4444",
+                            )
 
     # ── Layout ──────────────────────────────────────────────────────
     fig.update_layout(
@@ -348,7 +364,7 @@ def page_chart() -> None:
         legend=dict(orientation="h", y=1.04, x=0),
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"Source: Binance public klines · {symbol} {interval} · 200 candles")
+    st.caption(f"Source: Bybit public klines · {symbol} {interval} · 200 candles")
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────
