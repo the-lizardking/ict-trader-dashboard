@@ -19,19 +19,30 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
+import yfinance as yf
 
 BOT_API = os.environ.get("BOT_API_URL", "http://158.178.210.252:8001")
 TIMEOUT_S = 10.0
 POLL_INTERVAL_S = 10
 DEFAULT_LIMIT = 50
 
-# Bybit public klines — no API key required, no geo-restrictions
-BYBIT_KLINES_URL = "https://api.bybit.com/v5/market/kline"
+# Yahoo Finance ticker mapping (dashboard uses BTCUSDT style for signal matching)
+_YF_SYMBOL: dict[str, str] = {
+    "BTCUSDT": "BTC-USD",
+    "ETHUSDT": "ETH-USD",
+    "SOLUSDT": "SOL-USD",
+    "BNBUSDT": "BNB-USD",
+    "XRPUSDT": "XRP-USD",
+}
 
-# Map display labels to Bybit interval codes
-_BYBIT_INTERVAL: dict[str, str] = {
-    "1m": "1", "5m": "5", "15m": "15",
-    "1h": "60", "4h": "240", "1d": "D",
+# yfinance interval + download period that yields ~200 bars per interval label
+_YF_PARAMS: dict[str, dict] = {
+    "1m":  {"interval": "1m",  "period": "1d"},
+    "5m":  {"interval": "5m",  "period": "5d"},
+    "15m": {"interval": "15m", "period": "20d"},
+    "1h":  {"interval": "1h",  "period": "30d"},
+    "4h":  {"interval": "1h",  "period": "60d"},   # resampled after fetch
+    "1d":  {"interval": "1d",  "period": "2y"},
 }
 
 st.set_page_config(
@@ -88,37 +99,46 @@ def _fetch(path: str) -> tuple[Any, str | None]:
 def _fetch_candles(
     symbol: str, interval: str, limit: int = 200
 ) -> tuple[pd.DataFrame | None, str | None]:
-    """Fetch OHLCV from Bybit public klines (no auth, no geo-block)."""
+    """Fetch OHLCV from Yahoo Finance — no auth, no geo-restrictions."""
     try:
-        r = requests.get(
-            BYBIT_KLINES_URL,
-            params={
-                "category": "linear",
-                "symbol": symbol,
-                "interval": _BYBIT_INTERVAL.get(interval, "15"),
-                "limit": limit,
-            },
-            timeout=10.0,
+        params = _YF_PARAMS.get(interval, _YF_PARAMS["15m"])
+        yf_symbol = _YF_SYMBOL.get(symbol, symbol.replace("USDT", "-USD"))
+
+        raw = yf.download(
+            yf_symbol,
+            period=params["period"],
+            interval=params["interval"],
+            progress=False,
+            auto_adjust=True,
         )
-        r.raise_for_status()
-        payload = r.json()
-        if payload.get("retCode") != 0:
-            return None, f"Bybit error: {payload.get('retMsg', 'unknown')}"
-        # result.list = [[startTimeMs, open, high, low, close, volume, turnover], ...]
-        # Bybit returns newest-first; reverse to get chronological order.
-        rows = payload["result"]["list"][::-1]
-        df = pd.DataFrame(
-            rows,
-            columns=["openTime", "open", "high", "low", "close", "volume", "turnover"],
-        )
-        df["timestamp"] = pd.to_datetime(df["openTime"].astype("int64"), unit="ms")
-        for col in ("open", "high", "low", "close", "volume"):
-            df[col] = pd.to_numeric(df[col])
+        if raw.empty:
+            return None, f"No data returned for {yf_symbol}"
+
+        # Flatten MultiIndex columns produced by some yfinance versions
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = raw.columns.get_level_values(0)
+
+        if interval == "4h":
+            raw = raw.resample("4h").agg({
+                "Open": "first", "High": "max",
+                "Low": "min", "Close": "last", "Volume": "sum",
+            }).dropna()
+
+        raw = raw.tail(limit)
+        # Strip timezone so Plotly doesn't add UTC offset labels
+        ts = raw.index
+        if hasattr(ts, "tz") and ts.tz is not None:
+            ts = ts.tz_convert("UTC").tz_localize(None)
+
+        df = pd.DataFrame({
+            "timestamp": ts,
+            "open":   raw["Open"].to_numpy(),
+            "high":   raw["High"].to_numpy(),
+            "low":    raw["Low"].to_numpy(),
+            "close":  raw["Close"].to_numpy(),
+            "volume": raw["Volume"].to_numpy(),
+        })
         return df, None
-    except requests.HTTPError as exc:
-        return None, f"HTTP {exc.response.status_code} from Bybit"
-    except requests.Timeout:
-        return None, "Timed out fetching candles from Bybit"
     except Exception as exc:  # noqa: BLE001
         return None, f"Candle fetch error: {exc}"
 
@@ -228,7 +248,7 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 # ── Live Chart ────────────────────────────────────────────────────────────────
 
 CHART_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
-CHART_INTERVALS = list(_BYBIT_INTERVAL.keys())  # ["1m","5m","15m","1h","4h","1d"]
+CHART_INTERVALS = list(_YF_PARAMS.keys())  # ["1m","5m","15m","1h","4h","1d"]
 
 
 def page_chart() -> None:
@@ -245,7 +265,7 @@ def page_chart() -> None:
     with c4:
         show_trades = st.toggle("Trades", value=True)
 
-    # ── Candles (Bybit public API) ─────────────────────────────────
+    # ── Candles (Yahoo Finance) ────────────────────────────────────────
     df, candles_err = _fetch_candles(symbol, interval)
     if candles_err:
         st.warning(f"Candles unavailable: {candles_err}")
@@ -336,7 +356,6 @@ def page_chart() -> None:
                     ))
 
                 elif "entryPrice" in tdf.columns:
-                    # No timestamps — fall back to horizontal price levels
                     for _, trade in tdf.iterrows():
                         entry = trade.get("entryPrice")
                         exit_p = trade.get("exitPrice")
@@ -359,12 +378,12 @@ def page_chart() -> None:
         height=620,
         margin=dict(l=0, r=0, t=30, b=0),
         xaxis_title="Time",
-        yaxis_title="Price (USDT)",
+        yaxis_title="Price (USD)",
         xaxis_rangeslider_visible=False,
         legend=dict(orientation="h", y=1.04, x=0),
     )
     st.plotly_chart(fig, use_container_width=True)
-    st.caption(f"Source: Bybit public klines · {symbol} {interval} · 200 candles")
+    st.caption(f"Source: Yahoo Finance · {symbol} {interval} · up to 200 candles")
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────
