@@ -26,6 +26,7 @@ import os
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
 import requests
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
@@ -199,21 +200,97 @@ def health_tab() -> None:
         st.caption("No snapshot available.")
 
 
+def chart_tab() -> None:
+    candles, candles_err = _fetch("/api/bot/candles/BTCUSDT?limit=100")
+    signals, signals_err = _fetch("/api/bot/signals")
+    positions, positions_err = _fetch("/api/bot/positions")
+
+    if candles_err:
+        st.warning(f"Candles unavailable: {candles_err}")
+        return
+
+    if not candles:
+        st.caption("No candle data available.")
+        return
+
+    df = pd.DataFrame(candles)
+    required_cols = {"timestamp", "open", "high", "low", "close"}
+    if not required_cols.issubset(df.columns):
+        st.json(candles[:3])
+        return
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df = df.sort_values("timestamp")
+
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(
+        x=df["timestamp"],
+        open=df["open"],
+        high=df["high"],
+        low=df["low"],
+        close=df["close"],
+        name="BTCUSDT"
+    ))
+
+    if not signals_err and signals:
+        signals_df = pd.DataFrame(signals)
+        signals_df = signals_df[signals_df["symbol"] == "BTCUSDT"]
+        if not signals_df.empty:
+            signals_df["timestamp"] = pd.to_datetime(signals_df["timestamp"])
+            for _, sig in signals_df.iterrows():
+                color = "green" if sig.get("direction") == "LONG" else "red"
+                fig.add_trace(go.Scatter(
+                    x=[sig["timestamp"]],
+                    y=[sig.get("price", df["close"].iloc[-1])],
+                    mode="markers",
+                    marker=dict(size=10, color=color, symbol="triangle-up" if sig.get("direction") == "LONG" else "triangle-down"),
+                    name=f"Signal: {sig.get('pattern', 'N/A')}",
+                    hovertext=f"{sig.get('pattern', 'N/A')}<br>Conf: {sig.get('confidence', 0):.1%}"
+                ))
+
+    if not positions_err and positions:
+        positions_df = pd.DataFrame(positions)
+        positions_df = positions_df[positions_df["symbol"] == "BTCUSDT"]
+        if not positions_df.empty:
+            for _, pos in positions_df.iterrows():
+                entry = pos.get("entryPrice")
+                if entry:
+                    fig.add_hline(y=entry, line_dash="dash", line_color="blue", annotation_text=f"Entry: ${entry:,.2f}")
+                sl = pos.get("stopLoss")
+                if sl:
+                    fig.add_hline(y=sl, line_dash="dash", line_color="red", annotation_text=f"SL: ${sl:,.2f}")
+                tp = pos.get("takeProfit")
+                if tp:
+                    fig.add_hline(y=tp, line_dash="dash", line_color="green", annotation_text=f"TP: ${tp:,.2f}")
+
+    fig.update_layout(
+        title="BTCUSDT Live Chart",
+        xaxis_title="Time",
+        yaxis_title="Price (USD)",
+        template="plotly_dark",
+        hovermode="x unified",
+        height=600
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+
 def main() -> None:
     stats, stats_err = render_header()
-    tab_names = ["Overview", "Positions", "Signals", "Closed trades", "Logs", "Health"]
+    tab_names = ["Overview", "BTCUSDT Chart", "Positions", "Signals", "Closed trades", "Logs", "Health"]
     tabs = st.tabs(tab_names)
     with tabs[0]:
         overview_tab(stats, stats_err)
     with tabs[1]:
-        positions_tab()
+        chart_tab()
     with tabs[2]:
-        signals_tab()
+        positions_tab()
     with tabs[3]:
-        trades_tab()
+        signals_tab()
     with tabs[4]:
-        logs_tab()
+        trades_tab()
     with tabs[5]:
+        logs_tab()
+    with tabs[6]:
         health_tab()
 
 

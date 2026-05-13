@@ -151,6 +151,24 @@ class MockBotHandler(BaseHTTPRequestHandler):
                     "last_trade": "2025-05-13T14:32:00Z",
                 }
             }
+        elif self.path == "/api/bot/candles/BTCUSDT?limit=100":
+            data = []
+            base_price = 43000
+            for i in range(100):
+                ts = datetime.now() - timedelta(hours=100-i)
+                open_p = base_price + random.uniform(-200, 200)
+                close_p = open_p + random.uniform(-300, 300)
+                high_p = max(open_p, close_p) + random.uniform(0, 200)
+                low_p = min(open_p, close_p) - random.uniform(0, 200)
+                data.append({
+                    "timestamp": ts.isoformat(),
+                    "open": open_p,
+                    "high": high_p,
+                    "low": low_p,
+                    "close": close_p,
+                    "volume": random.uniform(100, 5000)
+                })
+                base_price = close_p
         else:
             self.send_error(404)
             return
