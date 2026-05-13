@@ -81,80 +81,88 @@ class MockBotHandler(BaseHTTPRequestHandler):
             ]
 
         if path == "/api/bot/signals":
+            now = datetime.now()
             return [
                 {
-                    "symbol": "BNBUSDT",
-                    "timestamp": datetime.now().isoformat(),
+                    "symbol": "BTCUSDT",
+                    "timestamp": (now - timedelta(minutes=2)).isoformat(),
                     "pattern": "Supply Zone Rejection",
                     "confidence": 0.87,
-                    "price": 615.42,
+                    "price": 43800.00,
                     "direction": "LONG",
                 },
                 {
-                    "symbol": "XRPUSDT",
-                    "timestamp": (datetime.now() - timedelta(minutes=5)).isoformat(),
+                    "symbol": "BTCUSDT",
+                    "timestamp": (now - timedelta(minutes=45)).isoformat(),
+                    "pattern": "Breaker Block",
+                    "confidence": 0.72,
+                    "price": 43200.00,
+                    "direction": "SHORT",
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "timestamp": (now - timedelta(minutes=5)).isoformat(),
                     "pattern": "Demand Zone Bounce",
                     "confidence": 0.76,
-                    "price": 2.48,
+                    "price": 2320.00,
                     "direction": "LONG",
-                },
-                {
-                    "symbol": "ADAUSDT",
-                    "timestamp": (datetime.now() - timedelta(minutes=15)).isoformat(),
-                    "pattern": None,
-                    "confidence": None,
-                    "price": 1.02,
-                    "direction": "SHORT",
                 },
             ]
 
         if path == "/api/bot/trades/closed":
+            now = datetime.now()
             return [
                 {
                     "tradeId": 1001,
-                    "symbol": "SOLUSDT",
+                    "symbol": "BTCUSDT",
                     "side": "LONG",
-                    "entryPrice": 182.45,
-                    "exitPrice": 189.20,
-                    "size": 10.0,
-                    "realizedPnl": 678.50,
-                    "realizedPnlPct": 3.71,
+                    "entryPrice": 43100.00,
+                    "exitPrice": 44200.00,
+                    "size": 0.5,
+                    "realizedPnl": 550.00,
+                    "realizedPnlPct": 2.55,
                     "closeReason": "Take Profit",
                     "pattern": "Fair Value Gap",
                     "duration": "2h 34m",
+                    "openTime": (now - timedelta(hours=5)).isoformat(),
+                    "closeTime": (now - timedelta(hours=2, minutes=26)).isoformat(),
                 },
                 {
                     "tradeId": 1000,
-                    "symbol": "LTCUSDT",
+                    "symbol": "BTCUSDT",
                     "side": "SHORT",
-                    "entryPrice": 98.50,
-                    "exitPrice": 96.20,
-                    "size": 25.0,
-                    "realizedPnl": 57.50,
-                    "realizedPnlPct": 2.33,
-                    "closeReason": "Stop Loss",
-                    "pattern": "Breaker Block",
+                    "entryPrice": 44500.00,
+                    "exitPrice": 44100.00,
+                    "size": 0.3,
+                    "realizedPnl": 120.00,
+                    "realizedPnlPct": 0.90,
+                    "closeReason": "Take Profit",
+                    "pattern": "Order Block",
                     "duration": "1h 12m",
+                    "openTime": (now - timedelta(hours=9)).isoformat(),
+                    "closeTime": (now - timedelta(hours=7, minutes=48)).isoformat(),
                 },
                 {
                     "tradeId": 999,
-                    "symbol": "DOGEUSDT",
+                    "symbol": "ETHUSDT",
                     "side": "LONG",
-                    "entryPrice": 0.38,
-                    "exitPrice": 0.41,
-                    "size": 5000.0,
-                    "realizedPnl": 1500.00,
-                    "realizedPnlPct": 7.89,
-                    "closeReason": "Take Profit",
-                    "pattern": "Order Block",
+                    "entryPrice": 2280.00,
+                    "exitPrice": 2250.00,
+                    "size": 3.0,
+                    "realizedPnl": -90.00,
+                    "realizedPnlPct": -1.32,
+                    "closeReason": "Stop Loss",
+                    "pattern": "Breaker Block",
                     "duration": "4h 21m",
+                    "openTime": (now - timedelta(hours=12)).isoformat(),
+                    "closeTime": (now - timedelta(hours=7, minutes=39)).isoformat(),
                 },
             ]
 
         if path == "/api/bot/logs":
             return [
-                {"level": "INFO", "timestamp": datetime.now().isoformat(), "message": "Trade closed: BTCUSDT +$427.50"},
-                {"level": "INFO", "timestamp": (datetime.now() - timedelta(seconds=30)).isoformat(), "message": "Signal detected on BNBUSDT"},
+                {"level": "INFO", "timestamp": datetime.now().isoformat(), "message": "Trade closed: BTCUSDT +$550.00"},
+                {"level": "INFO", "timestamp": (datetime.now() - timedelta(seconds=30)).isoformat(), "message": "Signal detected on BTCUSDT"},
                 {"level": "WARNING", "timestamp": (datetime.now() - timedelta(minutes=2)).isoformat(), "message": "High volatility detected, reducing position size"},
                 {"level": "INFO", "timestamp": (datetime.now() - timedelta(minutes=5)).isoformat(), "message": "New position opened: ETHUSDT"},
                 {"level": "DEBUG", "timestamp": (datetime.now() - timedelta(minutes=10)).isoformat(), "message": "Market update: 1234 candles processed"},
@@ -183,24 +191,6 @@ class MockBotHandler(BaseHTTPRequestHandler):
                     "last_trade": "2025-05-13T14:32:00Z",
                 },
             }
-
-        if path == "/api/bot/candles/BTCUSDT":
-            result = []
-            base = 43000.0
-            for i in range(100):
-                ts = datetime.now() - timedelta(hours=100 - i)
-                o = base + random.uniform(-200, 200)
-                c = o + random.uniform(-300, 300)
-                result.append({
-                    "timestamp": ts.isoformat(),
-                    "open": o,
-                    "high": max(o, c) + random.uniform(0, 200),
-                    "low": min(o, c) - random.uniform(0, 200),
-                    "close": c,
-                    "volume": random.uniform(100, 5000),
-                })
-                base = c
-            return result
 
         if path == "/api/bot/strategies":
             return {
@@ -231,17 +221,20 @@ class MockBotHandler(BaseHTTPRequestHandler):
                         "name": "VWAP Reversion",
                         "enabled": False,
                         "risk_pct": 0.5,
-                        "timeframe": "5m",
+                        "timeframe": "15m",
                         "symbols": ["BTCUSDT"],
-                        "description": {"short": "Mean reversion to intraday VWAP"},
+                        "description": {"short": "Liquidity sweep + reversal, 15m setup / 1m entry"},
                         "stats": {
-                            "total_trades": 78,
-                            "win_rate_pct": 58.9,
-                            "total_pnl": 1240.00,
-                            "exit_reasons": {"tp": 46, "sl": 32},
+                            "total_trades": 0,
+                            "win_rate_pct": 0.0,
+                            "total_pnl": 0.0,
+                            "exit_reasons": {},
                         },
                         "config": {"vwap_bands": 2.0},
-                        "changelog": [],
+                        "changelog": [
+                            {"date": "2025-04-10", "note": "Added liquidity sweep filter"},
+                            {"date": "2025-03-20", "note": "Initial release"},
+                        ],
                     },
                 ]
             }
@@ -344,7 +337,7 @@ class MockBotHandler(BaseHTTPRequestHandler):
         return None
 
     def log_message(self, format: str, *args: object) -> None:
-        pass  # suppress request logs
+        pass
 
 
 if __name__ == "__main__":
