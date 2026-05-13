@@ -250,6 +250,12 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 CHART_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
 CHART_INTERVALS = list(_YF_PARAMS.keys())  # ["1m","5m","15m","1h","4h","1d"]
 
+# Plotly config for mobile: single-finger pans, two-finger pinch zooms
+_CHART_CONFIG = {
+    "scrollZoom": True,
+    "displayModeBar": False,
+}
+
 
 def page_chart() -> None:
     st.header("Live Chart")
@@ -381,8 +387,9 @@ def page_chart() -> None:
         yaxis_title="Price (USD)",
         xaxis_rangeslider_visible=False,
         legend=dict(orientation="h", y=1.04, x=0),
+        dragmode="pan",
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, config=_CHART_CONFIG)
     st.caption(f"Source: Yahoo Finance · {symbol} {interval} · up to 200 candles")
 
 
