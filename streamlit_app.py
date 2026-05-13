@@ -25,6 +25,9 @@ TIMEOUT_S = 10.0
 POLL_INTERVAL_S = 10
 DEFAULT_LIMIT = 50
 
+# Binance public klines — no API key required
+BINANCE_KLINES_URL = "https://api.binance.com/api/v3/klines"
+
 st.set_page_config(
     page_title="ICT Trader",
     page_icon="📈",
@@ -32,8 +35,6 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# st.html() injects the block directly into the page without markdown
-# processing — avoids Streamlit Cloud stripping <style> from st.markdown.
 st.html("""
 <style>
   [data-testid="stSidebar"] {
@@ -75,6 +76,36 @@ def _fetch(path: str) -> tuple[Any, str | None]:
         return None, f"Network error on {path}: {e}"
     except ValueError as e:
         return None, f"Bad JSON from {path}: {e}"
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _fetch_candles(
+    symbol: str, interval: str, limit: int = 200
+) -> tuple[pd.DataFrame | None, str | None]:
+    """Fetch OHLCV from Binance public klines endpoint."""
+    try:
+        r = requests.get(
+            BINANCE_KLINES_URL,
+            params={"symbol": symbol, "interval": interval, "limit": limit},
+            timeout=10.0,
+        )
+        r.raise_for_status()
+        cols = [
+            "openTime", "open", "high", "low", "close", "volume",
+            "closeTime", "quoteVolume", "numTrades",
+            "takerBuyBase", "takerBuyQuote", "_",
+        ]
+        df = pd.DataFrame(r.json(), columns=cols)
+        df["timestamp"] = pd.to_datetime(df["openTime"], unit="ms")
+        for col in ("open", "high", "low", "close", "volume"):
+            df[col] = pd.to_numeric(df[col])
+        return df, None
+    except requests.HTTPError as exc:
+        return None, f"HTTP {exc.response.status_code} from Binance"
+    except requests.Timeout:
+        return None, "Timed out fetching candles from Binance"
+    except Exception as exc:  # noqa: BLE001
+        return None, f"Candle fetch error: {exc}"
 
 
 def fmt_pct(x: float | None) -> str:
@@ -181,80 +212,143 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 
 # ── Live Chart ────────────────────────────────────────────────────────────────
 
-def page_chart() -> None:
-    st.header("BTCUSDT Live Chart")
-    candles, candles_err = _fetch("/api/bot/candles/BTCUSDT?limit=100")
-    signals, signals_err = _fetch("/api/bot/signals")
-    positions, positions_err = _fetch("/api/bot/positions")
+CHART_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+CHART_INTERVALS = ["1m", "5m", "15m", "1h", "4h", "1d"]
 
+
+def page_chart() -> None:
+    st.header("Live Chart")
+
+    # ── Controls row ──────────────────────────────────────────────────
+    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+    with c1:
+        symbol = st.selectbox("Symbol", CHART_SYMBOLS)
+    with c2:
+        interval = st.selectbox("Interval", CHART_INTERVALS, index=2)  # default 15m
+    with c3:
+        show_signals = st.toggle("Signals", value=True)
+    with c4:
+        show_trades = st.toggle("Trades", value=True)
+
+    # ── Candles (Binance public API) ─────────────────────────────────
+    df, candles_err = _fetch_candles(symbol, interval)
     if candles_err:
         st.warning(f"Candles unavailable: {candles_err}")
         return
-    if not candles:
-        st.caption("No candle data available.")
+    if df is None or df.empty:
+        st.caption("No candle data.")
         return
-
-    df = pd.DataFrame(candles)
-    if not {"timestamp", "open", "high", "low", "close"}.issubset(df.columns):
-        st.json(candles[:3])
-        return
-
-    df["timestamp"] = pd.to_datetime(df["timestamp"])
-    df = df.sort_values("timestamp")
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=df["timestamp"], open=df["open"],
-        high=df["high"], low=df["low"], close=df["close"],
-        name="BTCUSDT",
+        x=df["timestamp"],
+        open=df["open"], high=df["high"],
+        low=df["low"], close=df["close"],
+        name=symbol,
+        increasing_line_color="#22c55e",
+        decreasing_line_color="#ef4444",
     ))
 
-    if not signals_err and signals:
-        sdf = pd.DataFrame(signals)
-        sdf = sdf[sdf["symbol"] == "BTCUSDT"]
-        if not sdf.empty:
-            sdf["timestamp"] = pd.to_datetime(sdf["timestamp"])
-            for _, sig in sdf.iterrows():
-                color = "green" if sig.get("direction") == "LONG" else "red"
-                fig.add_trace(go.Scatter(
-                    x=[sig["timestamp"]],
-                    y=[sig.get("price", df["close"].iloc[-1])],
-                    mode="markers",
-                    marker=dict(
-                        size=10, color=color,
-                        symbol="triangle-up" if sig.get("direction") == "LONG" else "triangle-down",
-                    ),
-                    name=f"Signal: {sig.get('pattern', 'N/A')}",
-                ))
-
-    if not positions_err and positions:
-        pdf = pd.DataFrame(positions)
-        pdf = pdf[pdf["symbol"] == "BTCUSDT"]
-        if not pdf.empty:
-            for _, pos in pdf.iterrows():
-                for level, label, color in [
-                    ("entryPrice", "Entry", "#3d7aed"),
-                    ("stopLoss", "SL", "#ef4444"),
-                    ("takeProfit", "TP", "#22c55e"),
+    # ── Signals layer ──────────────────────────────────────────────
+    if show_signals:
+        signals, _ = _fetch("/api/bot/signals")
+        if signals:
+            sdf = pd.DataFrame(signals)
+            if "symbol" in sdf.columns:
+                sdf = sdf[sdf["symbol"] == symbol]
+            if not sdf.empty and "timestamp" in sdf.columns:
+                sdf["timestamp"] = pd.to_datetime(sdf["timestamp"])
+                last_price = float(df["close"].iloc[-1])
+                for direction, marker_sym, color, label in [
+                    ("LONG", "triangle-up", "#22c55e", "Long signal"),
+                    ("SHORT", "triangle-down", "#ef4444", "Short signal"),
                 ]:
-                    val = pos.get(level)
-                    if val:
-                        fig.add_hline(
-                            y=val, line_dash="dash", line_color=color,
-                            annotation_text=f"{label}: ${val:,.2f}",
-                        )
+                    subset = sdf[sdf.get("direction", pd.Series(dtype=str)) == direction] \
+                        if "direction" in sdf.columns else pd.DataFrame()
+                    if not subset.empty:
+                        fig.add_trace(go.Scatter(
+                            x=subset["timestamp"],
+                            y=subset["price"] if "price" in subset.columns
+                              else [last_price] * len(subset),
+                            mode="markers",
+                            name=label,
+                            marker=dict(symbol=marker_sym, size=13, color=color,
+                                        line=dict(width=1, color="white")),
+                            hovertemplate=(
+                                f"{label}<br>"
+                                "%{x}<br>"
+                                "Price: %{y:,.2f}<br>"
+                                + ("Conf: " + subset["confidence"].astype(str).values[0]
+                                   if "confidence" in subset.columns else "")
+                                + "<extra></extra>"
+                            ),
+                        ))
 
+    # ── Trades layer ───────────────────────────────────────────────
+    if show_trades:
+        trades, _ = _fetch(f"/api/bot/trades/closed?limit={DEFAULT_LIMIT}")
+        if trades:
+            tdf = pd.DataFrame(trades)
+            if "symbol" in tdf.columns:
+                tdf = tdf[tdf["symbol"] == symbol]
+
+            if not tdf.empty:
+                pnl_col = "realizedPnl" if "realizedPnl" in tdf.columns else None
+
+                if "openTime" in tdf.columns and "entryPrice" in tdf.columns:
+                    # Full timestamp data — show entry circles
+                    tdf["openTime"] = pd.to_datetime(tdf["openTime"])
+                    fig.add_trace(go.Scatter(
+                        x=tdf["openTime"], y=tdf["entryPrice"],
+                        mode="markers",
+                        name="Entry",
+                        marker=dict(symbol="circle", size=9, color="#3d7aed",
+                                    line=dict(width=1, color="white")),
+                    ))
+
+                if "closeTime" in tdf.columns and "exitPrice" in tdf.columns:
+                    tdf["closeTime"] = pd.to_datetime(tdf["closeTime"])
+                    exit_colors = [
+                        "#22c55e" if (pnl_col and row.get(pnl_col, 0) > 0) else "#ef4444"
+                        for _, row in tdf.iterrows()
+                    ]
+                    fig.add_trace(go.Scatter(
+                        x=tdf["closeTime"], y=tdf["exitPrice"],
+                        mode="markers",
+                        name="Exit",
+                        marker=dict(symbol="x", size=10, color=exit_colors,
+                                    line=dict(width=2)),
+                    ))
+
+                elif "entryPrice" in tdf.columns:
+                    # No timestamps — fall back to horizontal price levels
+                    for _, trade in tdf.iterrows():
+                        entry = trade.get("entryPrice")
+                        exit_p = trade.get("exitPrice")
+                        won = (pnl_col and (trade.get(pnl_col) or 0) > 0)
+                        if entry:
+                            fig.add_hline(y=entry, line_dash="dot",
+                                          line_color="#3d7aed", opacity=0.4)
+                        if exit_p:
+                            fig.add_hline(y=exit_p, line_dash="dot",
+                                          line_color="#22c55e" if won else "#ef4444",
+                                          opacity=0.4)
+
+    # ── Layout ──────────────────────────────────────────────────────
     fig.update_layout(
         template="plotly_dark",
         plot_bgcolor="#060c1a",
         paper_bgcolor="#060c1a",
         hovermode="x unified",
-        height=600,
-        margin=dict(l=0, r=0, t=20, b=0),
+        height=620,
+        margin=dict(l=0, r=0, t=30, b=0),
         xaxis_title="Time",
-        yaxis_title="Price (USD)",
+        yaxis_title="Price (USDT)",
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", y=1.04, x=0),
     )
     st.plotly_chart(fig, use_container_width=True)
+    st.caption(f"Source: Binance public klines · {symbol} {interval} · 200 candles")
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────
@@ -666,10 +760,6 @@ def main() -> None:
     }
     dispatch.get(page, page_overview)()  # type: ignore[operator]
 
-    # Pure-Python polling: page is fully rendered above; sleep server-side
-    # then rerun so st.cache_data TTLs expire and data stays fresh.
-    # Widget interactions (sidebar clicks) will interrupt and trigger an
-    # immediate rerun, so navigation responsiveness is not affected.
     time.sleep(POLL_INTERVAL_S)
     st.rerun()
 
