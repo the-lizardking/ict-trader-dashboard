@@ -85,11 +85,13 @@ docs/                  — ad-hoc design notes
 | Tab | Endpoints |
 |---|---|
 | Overview | `/api/bot/stats`, `/api/pnl/history?days=30` |
+| BTCUSDT Chart | `/api/bot/candles/BTCUSDT`, `/api/bot/signals`, `/api/bot/positions` |
 | Positions | `/api/bot/positions` |
 | Signals | `/api/bot/signals` |
 | Closed trades | `/api/bot/trades/closed?limit=50` |
 | Logs | `/api/bot/logs` |
 | Health | `/api/bot/health/services`, `/api/bot/health/latest` |
+| Strategies | `/api/bot/strategies` |
 
 **Not (yet) ported from the old React app:** TradingView candle chart
 with Bybit-WS per-tick updates, Backtests, Models / ShadowModels (ML
