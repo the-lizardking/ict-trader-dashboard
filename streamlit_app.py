@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import time
 from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from streamlit_autorefresh import st_autorefresh
 
 BOT_API = os.environ.get("BOT_API_URL", "http://158.178.210.252:8001")
 TIMEOUT_S = 10.0
@@ -32,35 +32,29 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Midnight blue overrides on top of the base dark theme from config.toml
-st.markdown("""
+# st.html() injects the block directly into the page without markdown
+# processing — avoids Streamlit Cloud stripping <style> from st.markdown.
+st.html("""
 <style>
-  /* Sidebar gradient */
   [data-testid="stSidebar"] {
       background: linear-gradient(180deg, #050c1a 0%, #091428 100%);
       border-right: 1px solid #182040;
   }
-  /* Tighter sidebar radio options */
   [data-testid="stSidebar"] .stRadio > div { gap: 2px; }
   [data-testid="stSidebar"] .stRadio label { padding: 6px 8px; border-radius: 6px; }
   [data-testid="stSidebar"] .stRadio label:hover { background: #182040; }
-  /* Metric card styling */
   [data-testid="stMetric"] {
       background: #0d1628;
       border: 1px solid #1a2840;
       border-radius: 8px;
       padding: 0.6rem 0.8rem;
   }
-  /* Narrow top padding on main area */
   .main .block-container { padding-top: 1.2rem; }
-  /* Full-width single column on small screens */
   @media (max-width: 640px) {
       [data-testid="column"] { min-width: 100% !important; }
   }
 </style>
-""", unsafe_allow_html=True)
-
-st_autorefresh(interval=POLL_INTERVAL_S * 1000, key="poll_tick")
+""")
 
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
@@ -320,7 +314,6 @@ _STAGE_ICON = {
 def page_models() -> None:
     st.header("Models & Training")
 
-    # ── Active VM trainer sessions ────────────────────────────────────────
     st.subheader("VM Trainer Sessions")
     sessions, sessions_err = _fetch("/api/bot/ml/sessions")
 
@@ -381,7 +374,6 @@ def page_models() -> None:
 
     st.divider()
 
-    # ── Model registry ────────────────────────────────────────────────────
     st.subheader("Model Registry")
     registry, registry_err = _fetch("/api/bot/ml/registry")
 
@@ -456,7 +448,6 @@ def page_backtesting() -> None:
 
     df = pd.DataFrame(rows)
 
-    # ── Summary strip ────────────────────────────────────────────────────
     st.subheader("Summary")
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total runs", len(df))
@@ -471,7 +462,6 @@ def page_backtesting() -> None:
     m4.metric("Best PnL", fmt_usd(df["totalPnl"].max() if "totalPnl" in df else None))
     m5.metric("Worst PnL", fmt_usd(df["totalPnl"].min() if "totalPnl" in df else None))
 
-    # ── Win-rate trend ───────────────────────────────────────────────────
     if {"winRate", "runDate"}.issubset(df.columns):
         st.subheader("Win Rate Over Runs")
         chart_df = df[["runDate", "winRate", "totalPnl"]].sort_values("runDate")
@@ -507,7 +497,6 @@ def page_backtesting() -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-    # ── Results table ─────────────────────────────────────────────────────
     st.subheader("All Runs")
     col_map = {
         "id": "ID",
@@ -530,7 +519,6 @@ def page_backtesting() -> None:
         use_container_width=True,
     )
 
-    # ── Per-run drill-down ────────────────────────────────────────────────
     if "id" in df.columns:
         st.subheader("Run Detail")
         selected_id = st.selectbox("Select run ID", df["id"].tolist())
@@ -677,6 +665,13 @@ def main() -> None:
         "Logs": page_logs,
     }
     dispatch.get(page, page_overview)()  # type: ignore[operator]
+
+    # Pure-Python polling: page is fully rendered above; sleep server-side
+    # then rerun so st.cache_data TTLs expire and data stays fresh.
+    # Widget interactions (sidebar clicks) will interrupt and trigger an
+    # immediate rerun, so navigation responsiveness is not affected.
+    time.sleep(POLL_INTERVAL_S)
+    st.rerun()
 
 
 if __name__ == "__main__":
