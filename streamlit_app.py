@@ -175,6 +175,69 @@ def logs_tab() -> None:
     )
 
 
+def strategies_tab() -> None:
+    data, err = _fetch("/api/bot/strategies")
+    if err:
+        st.warning(err)
+        return
+    strategies = (data or {}).get("strategies") or []
+    if not strategies:
+        st.caption("No strategy data available.")
+        return
+
+    # ── Per-strategy cards ──────────────────────────────────────────────
+    for strat in strategies:
+        name = strat.get("name", "")
+        enabled = strat.get("enabled", True)
+        risk_pct = strat.get("risk_pct")
+        timeframe = strat.get("timeframe", "—")
+        symbols = ", ".join(strat.get("symbols") or []) or "—"
+        stats = strat.get("stats") or {}
+        desc = strat.get("description") or {}
+        changelog = strat.get("changelog") or []
+
+        badge = "🟢" if enabled else "🔴"
+        st.subheader(f"{badge} {name}")
+        st.caption(desc.get("short", ""))
+
+        # Metrics row
+        m1, m2, m3, m4, m5, m6 = st.columns(6)
+        m1.metric("Timeframe", timeframe)
+        m2.metric("Risk/trade", f"{risk_pct}%" if risk_pct is not None else "—")
+        m3.metric("Symbols", symbols)
+        m4.metric("Total trades", stats.get("total_trades", 0))
+        m5.metric("Win rate", fmt_pct(stats.get("win_rate_pct")))
+        m6.metric("Total PnL", fmt_usd(stats.get("total_pnl")))
+
+        # Exit-reason breakdown
+        exit_reasons = stats.get("exit_reasons") or {}
+        if exit_reasons:
+            total = stats.get("total_trades") or 1
+            reason_cols = st.columns(len(exit_reasons))
+            for col, (reason, count) in zip(reason_cols, sorted(exit_reasons.items())):
+                col.metric(reason, count, f"{count / total * 100:.0f}%")
+
+        # How it works
+        how = desc.get("how_it_works", "")
+        if how:
+            with st.expander("How it works"):
+                st.write(how)
+
+        # Config details
+        cfg = strat.get("config") or {}
+        if cfg:
+            with st.expander("Config parameters"):
+                st.json(cfg)
+
+        # Update log
+        if changelog:
+            with st.expander(f"Update log ({len(changelog)} entries)"):
+                cl_df = pd.DataFrame(changelog)
+                st.dataframe(cl_df, hide_index=True, use_container_width=True)
+
+        st.divider()
+
+
 def health_tab() -> None:
     services, services_err = _fetch("/api/bot/health/services")
     latest, latest_err = _fetch("/api/bot/health/latest")
@@ -276,7 +339,7 @@ def chart_tab() -> None:
 
 def main() -> None:
     stats, stats_err = render_header()
-    tab_names = ["Overview", "BTCUSDT Chart", "Positions", "Signals", "Closed trades", "Logs", "Health"]
+    tab_names = ["Overview", "BTCUSDT Chart", "Positions", "Signals", "Closed trades", "Logs", "Health", "Strategies"]
     tabs = st.tabs(tab_names)
     with tabs[0]:
         overview_tab(stats, stats_err)
@@ -292,6 +355,8 @@ def main() -> None:
         logs_tab()
     with tabs[6]:
         health_tab()
+    with tabs[7]:
+        strategies_tab()
 
 
 if __name__ == "__main__":
