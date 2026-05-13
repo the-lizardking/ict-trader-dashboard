@@ -20,6 +20,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import yfinance as yf
+from plotly.subplots import make_subplots
 
 BOT_API = os.environ.get("BOT_API_URL", "http://158.178.210.252:8001")
 TIMEOUT_S = 10.0
@@ -43,6 +44,27 @@ _YF_PARAMS: dict[str, dict] = {
     "1h":  {"interval": "1h",  "period": "30d"},
     "4h":  {"interval": "1h",  "period": "60d"},   # resampled after fetch
     "1d":  {"interval": "1d",  "period": "2y"},
+}
+
+# TradingView-inspired palette
+_TV_BG     = "#131722"
+_TV_GRID   = "#1e2634"
+_TV_GREEN  = "#26a69a"
+_TV_RED    = "#ef5350"
+_TV_TEXT   = "#b2b5be"
+_TV_EMA20  = "#f5a623"
+_TV_EMA50  = "#9b59b6"
+_TV_SIGNAL_LONG  = "#26a69a"
+_TV_SIGNAL_SHORT = "#ef5350"
+_TV_ENTRY  = "#3d7aed"
+
+_CHART_CONFIG = {
+    "scrollZoom": True,
+    "displayModeBar": True,
+    "modeBarButtonsToRemove": [
+        "toImage", "sendDataToCloud", "lasso2d", "select2d", "autoScale2d",
+    ],
+    "displaylogo": False,
 }
 
 st.set_page_config(
@@ -79,7 +101,6 @@ st.html("""
 
 @st.cache_data(ttl=POLL_INTERVAL_S, show_spinner=False)
 def _fetch(path: str) -> tuple[Any, str | None]:
-    """GET `${BOT_API}{path}` -> (json_or_none, error_message_or_none)."""
     url = f"{BOT_API}{path}"
     try:
         r = requests.get(url, timeout=TIMEOUT_S)
@@ -99,7 +120,6 @@ def _fetch(path: str) -> tuple[Any, str | None]:
 def _fetch_candles(
     symbol: str, interval: str, limit: int = 200
 ) -> tuple[pd.DataFrame | None, str | None]:
-    """Fetch OHLCV from Yahoo Finance — no auth, no geo-restrictions."""
     try:
         params = _YF_PARAMS.get(interval, _YF_PARAMS["15m"])
         yf_symbol = _YF_SYMBOL.get(symbol, symbol.replace("USDT", "-USD"))
@@ -114,7 +134,6 @@ def _fetch_candles(
         if raw.empty:
             return None, f"No data returned for {yf_symbol}"
 
-        # Flatten MultiIndex columns produced by some yfinance versions
         if isinstance(raw.columns, pd.MultiIndex):
             raw.columns = raw.columns.get_level_values(0)
 
@@ -125,7 +144,6 @@ def _fetch_candles(
             }).dropna()
 
         raw = raw.tail(limit)
-        # Strip timezone so Plotly doesn't add UTC offset labels
         ts = raw.index
         if hasattr(ts, "tz") and ts.tz is not None:
             ts = ts.tz_convert("UTC").tz_localize(None)
@@ -154,29 +172,15 @@ def fmt_usd(x: float | None) -> str:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
 PAGES = [
-    "Overview",
-    "Live Chart",
-    "Positions",
-    "Signals",
-    "Closed Trades",
-    "Models",
-    "Backtesting",
-    "Strategies",
-    "Health",
-    "Logs",
+    "Overview", "Live Chart", "Positions", "Signals",
+    "Closed Trades", "Models", "Backtesting", "Strategies",
+    "Health", "Logs",
 ]
 
 PAGE_ICONS = {
-    "Overview": "🏠",
-    "Live Chart": "📊",
-    "Positions": "📋",
-    "Signals": "⚡",
-    "Closed Trades": "✅",
-    "Models": "🧠",
-    "Backtesting": "🔬",
-    "Strategies": "♟️",
-    "Health": "💊",
-    "Logs": "📜",
+    "Overview": "🏠", "Live Chart": "📊", "Positions": "📋",
+    "Signals": "⚡", "Closed Trades": "✅", "Models": "🧠",
+    "Backtesting": "🔬", "Strategies": "♟️", "Health": "💊", "Logs": "📜",
 }
 
 
@@ -197,12 +201,10 @@ def render_sidebar() -> str:
         st.divider()
 
         page = st.radio(
-            "nav",
-            PAGES,
+            "nav", PAGES,
             format_func=lambda p: f"{PAGE_ICONS.get(p, '')} {p}",
             label_visibility="collapsed",
         )
-
         st.divider()
         st.caption(f"Auto-refresh every {POLL_INTERVAL_S}s")
 
@@ -247,31 +249,27 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 
 # ── Live Chart ────────────────────────────────────────────────────────────────
 
-CHART_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
-CHART_INTERVALS = list(_YF_PARAMS.keys())  # ["1m","5m","15m","1h","4h","1d"]
-
-# Plotly config for mobile: single-finger pans, two-finger pinch zooms
-_CHART_CONFIG = {
-    "scrollZoom": True,
-    "displayModeBar": False,
-}
+CHART_SYMBOLS  = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+CHART_INTERVALS = list(_YF_PARAMS.keys())
 
 
 def page_chart() -> None:
     st.header("Live Chart")
 
-    # ── Controls row ──────────────────────────────────────────────────
-    c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-    with c1:
+    # ── Controls ────────────────────────────────────────────────────
+    r1c1, r1c2 = st.columns([3, 2])
+    with r1c1:
         symbol = st.selectbox("Symbol", CHART_SYMBOLS)
-    with c2:
-        interval = st.selectbox("Interval", CHART_INTERVALS, index=2)  # default 15m
-    with c3:
-        show_signals = st.toggle("Signals", value=True)
-    with c4:
-        show_trades = st.toggle("Trades", value=True)
+    with r1c2:
+        interval = st.selectbox("Interval", CHART_INTERVALS, index=2)
 
-    # ── Candles (Yahoo Finance) ────────────────────────────────────────
+    t1, t2, t3, t4 = st.columns(4)
+    show_ema20    = t1.toggle("EMA 20",   value=True)
+    show_ema50    = t2.toggle("EMA 50",   value=True)
+    show_signals  = t3.toggle("Signals",  value=False)
+    show_trades   = t4.toggle("Trades",   value=False)
+
+    # ── Fetch candles ─────────────────────────────────────────────
     df, candles_err = _fetch_candles(symbol, interval)
     if candles_err:
         st.warning(f"Candles unavailable: {candles_err}")
@@ -280,17 +278,50 @@ def page_chart() -> None:
         st.caption("No candle data.")
         return
 
-    fig = go.Figure()
+    # Derived series
+    df["ema20"] = df["close"].ewm(span=20, adjust=False).mean()
+    df["ema50"] = df["close"].ewm(span=50, adjust=False).mean()
+    vol_colors = [
+        _TV_GREEN if c >= o else _TV_RED
+        for c, o in zip(df["close"], df["open"])
+    ]
+
+    # ── Build figure ────────────────────────────────────────────
+    fig = make_subplots(
+        rows=2, cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.02,
+        row_heights=[0.75, 0.25],
+    )
+
+    # Candlesticks
     fig.add_trace(go.Candlestick(
         x=df["timestamp"],
         open=df["open"], high=df["high"],
-        low=df["low"], close=df["close"],
+        low=df["low"],   close=df["close"],
         name=symbol,
-        increasing_line_color="#22c55e",
-        decreasing_line_color="#ef4444",
-    ))
+        increasing=dict(line=dict(color=_TV_GREEN, width=1), fillcolor=_TV_GREEN),
+        decreasing=dict(line=dict(color=_TV_RED,   width=1), fillcolor=_TV_RED),
+    ), row=1, col=1)
 
-    # ── Signals layer ──────────────────────────────────────────────
+    # EMA lines
+    if show_ema20:
+        fig.add_trace(go.Scatter(
+            x=df["timestamp"], y=df["ema20"],
+            name="EMA 20",
+            line=dict(color=_TV_EMA20, width=1.5),
+            hovertemplate="EMA 20: %{y:.4g}<extra></extra>",
+        ), row=1, col=1)
+
+    if show_ema50:
+        fig.add_trace(go.Scatter(
+            x=df["timestamp"], y=df["ema50"],
+            name="EMA 50",
+            line=dict(color=_TV_EMA50, width=1.5),
+            hovertemplate="EMA 50: %{y:.4g}<extra></extra>",
+        ), row=1, col=1)
+
+    # Signals layer
     if show_signals:
         signals, _ = _fetch("/api/bot/signals")
         if signals:
@@ -301,96 +332,104 @@ def page_chart() -> None:
                 sdf["timestamp"] = pd.to_datetime(sdf["timestamp"])
                 last_price = float(df["close"].iloc[-1])
                 for direction, marker_sym, color, label in [
-                    ("LONG", "triangle-up", "#22c55e", "Long signal"),
-                    ("SHORT", "triangle-down", "#ef4444", "Short signal"),
+                    ("LONG",  "triangle-up",   _TV_SIGNAL_LONG,  "Long signal"),
+                    ("SHORT", "triangle-down",  _TV_SIGNAL_SHORT, "Short signal"),
                 ]:
                     subset = (
                         sdf[sdf["direction"] == direction]
-                        if "direction" in sdf.columns
-                        else pd.DataFrame()
+                        if "direction" in sdf.columns else pd.DataFrame()
                     )
                     if not subset.empty:
                         fig.add_trace(go.Scatter(
                             x=subset["timestamp"],
                             y=subset["price"] if "price" in subset.columns
                               else [last_price] * len(subset),
-                            mode="markers",
-                            name=label,
-                            marker=dict(
-                                symbol=marker_sym, size=13, color=color,
-                                line=dict(width=1, color="white"),
-                            ),
-                        ))
+                            mode="markers", name=label,
+                            marker=dict(symbol=marker_sym, size=14, color=color,
+                                        line=dict(width=1, color="white")),
+                        ), row=1, col=1)
 
-    # ── Trades layer ───────────────────────────────────────────────
+    # Trades layer
     if show_trades:
         trades, _ = _fetch(f"/api/bot/trades/closed?limit={DEFAULT_LIMIT}")
         if trades:
             tdf = pd.DataFrame(trades)
             if "symbol" in tdf.columns:
                 tdf = tdf[tdf["symbol"] == symbol]
-
             if not tdf.empty:
                 pnl_col = "realizedPnl" if "realizedPnl" in tdf.columns else None
-
                 if "openTime" in tdf.columns and "entryPrice" in tdf.columns:
                     tdf["openTime"] = pd.to_datetime(tdf["openTime"])
                     fig.add_trace(go.Scatter(
                         x=tdf["openTime"], y=tdf["entryPrice"],
-                        mode="markers",
-                        name="Entry",
-                        marker=dict(
-                            symbol="circle", size=9, color="#3d7aed",
-                            line=dict(width=1, color="white"),
-                        ),
-                    ))
-
+                        mode="markers", name="Entry",
+                        marker=dict(symbol="circle", size=9, color=_TV_ENTRY,
+                                    line=dict(width=1, color="white")),
+                    ), row=1, col=1)
                 if "closeTime" in tdf.columns and "exitPrice" in tdf.columns:
                     tdf["closeTime"] = pd.to_datetime(tdf["closeTime"])
                     exit_colors = [
-                        "#22c55e" if (pnl_col and row.get(pnl_col, 0) > 0) else "#ef4444"
+                        _TV_GREEN if (pnl_col and row.get(pnl_col, 0) > 0) else _TV_RED
                         for _, row in tdf.iterrows()
                     ]
                     fig.add_trace(go.Scatter(
                         x=tdf["closeTime"], y=tdf["exitPrice"],
-                        mode="markers",
-                        name="Exit",
-                        marker=dict(
-                            symbol="x", size=10, color=exit_colors,
-                            line=dict(width=2),
-                        ),
-                    ))
+                        mode="markers", name="Exit",
+                        marker=dict(symbol="x", size=10, color=exit_colors,
+                                    line=dict(width=2)),
+                    ), row=1, col=1)
 
-                elif "entryPrice" in tdf.columns:
-                    for _, trade in tdf.iterrows():
-                        entry = trade.get("entryPrice")
-                        exit_p = trade.get("exitPrice")
-                        won = pnl_col and (trade.get(pnl_col) or 0) > 0
-                        if entry:
-                            fig.add_hline(y=entry, line_dash="dot",
-                                          line_color="#3d7aed", opacity=0.4)
-                        if exit_p:
-                            fig.add_hline(
-                                y=exit_p, line_dash="dot", opacity=0.4,
-                                line_color="#22c55e" if won else "#ef4444",
-                            )
+    # Volume bars
+    fig.add_trace(go.Bar(
+        x=df["timestamp"], y=df["volume"],
+        name="Volume",
+        marker_color=vol_colors,
+        opacity=0.7,
+        showlegend=False,
+        hovertemplate="Vol: %{y:.4s}<extra></extra>",
+    ), row=2, col=1)
 
-    # ── Layout ──────────────────────────────────────────────────────
+    # ── Styling ──────────────────────────────────────────────────
+    _axis = dict(
+        gridcolor=_TV_GRID, gridwidth=1,
+        color=_TV_TEXT, tickfont=dict(color=_TV_TEXT, size=10),
+        linecolor=_TV_GRID, zerolinecolor=_TV_GRID,
+        showspikes=True, spikemode="across", spikesnap="cursor",
+        spikecolor=_TV_TEXT, spikethickness=1, spikedash="dot",
+    )
+
     fig.update_layout(
         template="plotly_dark",
-        plot_bgcolor="#060c1a",
-        paper_bgcolor="#060c1a",
+        plot_bgcolor=_TV_BG,
+        paper_bgcolor=_TV_BG,
         hovermode="x unified",
-        height=620,
-        margin=dict(l=0, r=0, t=30, b=0),
-        xaxis_title="Time",
-        yaxis_title="Price (USD)",
-        xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", y=1.04, x=0),
+        height=700,
+        margin=dict(l=0, r=70, t=10, b=0),
         dragmode="pan",
+        xaxis_rangeslider_visible=False,
+        legend=dict(
+            orientation="h", y=1.02, x=0,
+            font=dict(size=11, color=_TV_TEXT),
+            bgcolor="rgba(0,0,0,0)",
+        ),
+        font=dict(color=_TV_TEXT, size=11),
+        hoverlabel=dict(
+            bgcolor="#1e2634", bordercolor=_TV_GRID,
+            font=dict(color=_TV_TEXT, size=12),
+        ),
     )
+
+    # Price axis on the right (row 1), volume axis (row 2)
+    fig.update_xaxes(**_axis)
+    fig.update_yaxes(**_axis)
+    fig.update_yaxes(side="right", row=1, col=1)
+    fig.update_yaxes(side="right", showgrid=False, tickformat=".4s", row=2, col=1)
+
     st.plotly_chart(fig, use_container_width=True, config=_CHART_CONFIG)
-    st.caption(f"Source: Yahoo Finance · {symbol} {interval} · up to 200 candles")
+    st.caption(
+        f"Yahoo Finance · {_YF_SYMBOL.get(symbol, symbol)} · {interval} · "
+        f"EMA 20/50 · up to 200 candles"
+    )
 
 
 # ── Positions ─────────────────────────────────────────────────────────────────
@@ -438,12 +477,8 @@ def page_trades() -> None:
 # ── Models & Training ─────────────────────────────────────────────────────────
 
 _STAGE_ICON = {
-    "live_approved": "🟢",
-    "limited_live": "🟡",
-    "shadow": "🔵",
-    "backtest_approved": "🟤",
-    "candidate": "⚪",
-    "research_only": "⚫",
+    "live_approved": "🟢", "limited_live": "🟡", "shadow": "🔵",
+    "backtest_approved": "🟤", "candidate": "⚪", "research_only": "⚫",
 }
 
 
@@ -470,7 +505,7 @@ def page_models() -> None:
             else (sessions or {}).get("sessions", [])
         )
         active = [s for s in sessions_list if s.get("status") == "running"]
-        done = [s for s in sessions_list if s.get("status") == "completed"]
+        done   = [s for s in sessions_list if s.get("status") == "completed"]
         failed = [s for s in sessions_list if s.get("status") == "failed"]
 
         c1, c2, c3 = st.columns(3)
@@ -504,9 +539,7 @@ def page_models() -> None:
         if failed:
             with st.expander(f"Failed runs ({len(failed)})", expanded=True):
                 for sess in failed:
-                    st.error(
-                        f"**{sess.get('model_id', '?')}** — {sess.get('error', 'unknown error')}"
-                    )
+                    st.error(f"**{sess.get('model_id', '?')}** — {sess.get('error', 'unknown error')}")
 
     st.divider()
 
@@ -526,28 +559,26 @@ def page_models() -> None:
         return
 
     for model in models:
-        stage = model.get("target_deployment_stage", "unknown")
-        icon = _STAGE_ICON.get(stage, "❔")
+        stage    = model.get("target_deployment_stage", "unknown")
+        icon     = _STAGE_ICON.get(stage, "❔")
         model_id = model.get("model_id", "?")
-        family = model.get("model_family", "?")
+        family   = model.get("model_family", "?")
 
         with st.expander(f"{icon} {model_id} · {family} · `{stage}`"):
             m1, m2, m3 = st.columns(3)
-            m1.metric("Trainer", model.get("trainer", "?").split(".")[-1])
+            m1.metric("Trainer",   model.get("trainer",   "?").split(".")[-1])
             m2.metric("Evaluator", model.get("evaluator", "?").split(".")[-1])
             m3.metric("Stage", stage)
 
             ds = model.get("dataset") or {}
             if ds:
                 st.markdown(
-                    f"**Dataset:** "
-                    f"`{ds.get('family')}/{ds.get('symbol_scope')}"
+                    f"**Dataset:** `{ds.get('family')}/{ds.get('symbol_scope')}"
                     f"/{ds.get('timeframe')}/{ds.get('version')}`"
                 )
 
-            notes = model.get("notes", "")
-            if notes:
-                st.caption(notes)
+            if model.get("notes"):
+                st.caption(model["notes"])
 
             cfg = model.get("trainer_config") or {}
             if cfg:
@@ -571,15 +602,11 @@ def page_backtesting() -> None:
         path += f"&strategy={strategy_filter.strip()}"
 
     rows, err = _fetch(path)
-
     if err:
         st.warning(f"Backtests endpoint error: {err}")
         return
     if not rows:
-        st.info(
-            "No backtest results yet. "
-            "Run `python -m src.backtest.run_backtest` to populate."
-        )
+        st.info("No backtest results yet. Run `python -m src.backtest.run_backtest` to populate.")
         return
 
     df = pd.DataFrame(rows)
@@ -587,46 +614,29 @@ def page_backtesting() -> None:
     st.subheader("Summary")
     m1, m2, m3, m4, m5 = st.columns(5)
     m1.metric("Total runs", len(df))
-    m2.metric(
-        "Avg win rate",
-        fmt_pct(df["winRate"].mean() if "winRate" in df else None),
-    )
-    m3.metric(
-        "Avg profit factor",
-        f"{df['profitFactor'].mean():.2f}" if "profitFactor" in df else "—",
-    )
-    m4.metric("Best PnL", fmt_usd(df["totalPnl"].max() if "totalPnl" in df else None))
-    m5.metric("Worst PnL", fmt_usd(df["totalPnl"].min() if "totalPnl" in df else None))
+    m2.metric("Avg win rate",     fmt_pct(df["winRate"].mean()      if "winRate"      in df else None))
+    m3.metric("Avg profit factor",f"{df['profitFactor'].mean():.2f}" if "profitFactor" in df else "—")
+    m4.metric("Best PnL",   fmt_usd(df["totalPnl"].max() if "totalPnl" in df else None))
+    m5.metric("Worst PnL",  fmt_usd(df["totalPnl"].min() if "totalPnl" in df else None))
 
     if {"winRate", "runDate"}.issubset(df.columns):
         st.subheader("Win Rate Over Runs")
         chart_df = df[["runDate", "winRate", "totalPnl"]].sort_values("runDate")
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=chart_df["runDate"],
-            y=chart_df["winRate"],
-            name="Win Rate %",
-            line=dict(color="#3d7aed", width=2),
-            mode="lines+markers",
-            marker=dict(size=6),
+            x=chart_df["runDate"], y=chart_df["winRate"],
+            name="Win Rate %", line=dict(color="#3d7aed", width=2),
+            mode="lines+markers", marker=dict(size=6),
         ))
         fig.add_trace(go.Bar(
-            x=chart_df["runDate"],
-            y=chart_df["totalPnl"],
+            x=chart_df["runDate"], y=chart_df["totalPnl"],
             name="Total PnL",
-            marker_color=[
-                "#22c55e" if v >= 0 else "#ef4444"
-                for v in chart_df["totalPnl"]
-            ],
-            yaxis="y2",
-            opacity=0.5,
+            marker_color=["#22c55e" if v >= 0 else "#ef4444" for v in chart_df["totalPnl"]],
+            yaxis="y2", opacity=0.5,
         ))
         fig.update_layout(
-            template="plotly_dark",
-            plot_bgcolor="#060c1a",
-            paper_bgcolor="#060c1a",
-            height=300,
-            margin=dict(l=0, r=0, t=10, b=0),
+            template="plotly_dark", plot_bgcolor="#060c1a", paper_bgcolor="#060c1a",
+            height=300, margin=dict(l=0, r=0, t=10, b=0),
             yaxis=dict(title="Win Rate %"),
             yaxis2=dict(title="PnL", overlaying="y", side="right"),
             legend=dict(orientation="h", y=1.05),
@@ -635,25 +645,13 @@ def page_backtesting() -> None:
 
     st.subheader("All Runs")
     col_map = {
-        "id": "ID",
-        "strategy": "Strategy",
-        "runDate": "Run Date",
-        "startDate": "Start",
-        "endDate": "End",
-        "totalTrades": "Trades",
-        "winRate": "Win %",
-        "profitFactor": "PF",
-        "expectancy": "Expectancy",
-        "sharpeRatio": "Sharpe",
-        "maxDrawdownPct": "Max DD %",
-        "totalPnl": "PnL",
+        "id": "ID", "strategy": "Strategy", "runDate": "Run Date",
+        "startDate": "Start", "endDate": "End", "totalTrades": "Trades",
+        "winRate": "Win %", "profitFactor": "PF", "expectancy": "Expectancy",
+        "sharpeRatio": "Sharpe", "maxDrawdownPct": "Max DD %", "totalPnl": "PnL",
     }
     display_cols = [c for c in col_map if c in df.columns]
-    st.dataframe(
-        df[display_cols].rename(columns=col_map),
-        hide_index=True,
-        use_container_width=True,
-    )
+    st.dataframe(df[display_cols].rename(columns=col_map), hide_index=True, use_container_width=True)
 
     if "id" in df.columns:
         st.subheader("Run Detail")
@@ -662,15 +660,14 @@ def page_backtesting() -> None:
             row = df[df["id"] == selected_id].iloc[0].to_dict()
             d1, d2, d3, d4 = st.columns(4)
             d1.metric("Total Trades", row.get("totalTrades", "—"))
-            d2.metric("Win Rate", fmt_pct(row.get("winRate")))
-            d3.metric("Total PnL", fmt_usd(row.get("totalPnl")))
+            d2.metric("Win Rate",     fmt_pct(row.get("winRate")))
+            d3.metric("Total PnL",   fmt_usd(row.get("totalPnl")))
             d4.metric("Profit Factor", f"{row.get('profitFactor', 0):.2f}")
-
             d5, d6, d7, d8 = st.columns(4)
-            d5.metric("Winning", row.get("winningTrades", "—"))
-            d6.metric("Losing", row.get("losingTrades", "—"))
+            d5.metric("Winning",    row.get("winningTrades", "—"))
+            d6.metric("Losing",     row.get("losingTrades",  "—"))
             d7.metric("Expectancy", fmt_usd(row.get("expectancy")))
-            d8.metric("Max DD %", fmt_pct(row.get("maxDrawdownPct")))
+            d8.metric("Max DD %",   fmt_pct(row.get("maxDrawdownPct")))
 
 
 # ── Strategies ────────────────────────────────────────────────────────────────
@@ -687,26 +684,25 @@ def page_strategies() -> None:
         return
 
     for strat in strategies:
-        name = strat.get("name", "")
-        enabled = strat.get("enabled", True)
-        risk_pct = strat.get("risk_pct")
+        name      = strat.get("name", "")
+        enabled   = strat.get("enabled", True)
+        risk_pct  = strat.get("risk_pct")
         timeframe = strat.get("timeframe", "—")
-        symbols = ", ".join(strat.get("symbols") or []) or "—"
-        stats = strat.get("stats") or {}
-        desc = strat.get("description") or {}
+        symbols   = ", ".join(strat.get("symbols") or []) or "—"
+        stats     = strat.get("stats") or {}
+        desc      = strat.get("description") or {}
         changelog = strat.get("changelog") or []
 
-        badge = "🟢" if enabled else "🔴"
-        st.subheader(f"{badge} {name}")
+        st.subheader(f"{'🟢' if enabled else '🔴'} {name}")
         st.caption(desc.get("short", ""))
 
         m1, m2, m3, m4, m5, m6 = st.columns(6)
-        m1.metric("Timeframe", timeframe)
-        m2.metric("Risk/trade", f"{risk_pct}%" if risk_pct is not None else "—")
-        m3.metric("Symbols", symbols)
+        m1.metric("Timeframe",    timeframe)
+        m2.metric("Risk/trade",   f"{risk_pct}%" if risk_pct is not None else "—")
+        m3.metric("Symbols",      symbols)
         m4.metric("Total trades", stats.get("total_trades", 0))
-        m5.metric("Win rate", fmt_pct(stats.get("win_rate_pct")))
-        m6.metric("Total PnL", fmt_usd(stats.get("total_pnl")))
+        m5.metric("Win rate",     fmt_pct(stats.get("win_rate_pct")))
+        m6.metric("Total PnL",   fmt_usd(stats.get("total_pnl")))
 
         exit_reasons = stats.get("exit_reasons") or {}
         if exit_reasons:
@@ -715,20 +711,15 @@ def page_strategies() -> None:
             for col, (reason, count) in zip(reason_cols, sorted(exit_reasons.items())):
                 col.metric(reason, count, f"{count / total * 100:.0f}%")
 
-        how = (desc or {}).get("how_it_works", "")
-        if how:
+        if (desc or {}).get("how_it_works"):
             with st.expander("How it works"):
-                st.write(how)
-
-        cfg = strat.get("config") or {}
-        if cfg:
+                st.write(desc["how_it_works"])
+        if strat.get("config"):
             with st.expander("Config parameters"):
-                st.json(cfg)
-
+                st.json(strat["config"])
         if changelog:
             with st.expander(f"Update log ({len(changelog)} entries)"):
                 st.dataframe(pd.DataFrame(changelog), hide_index=True, use_container_width=True)
-
         st.divider()
 
 
@@ -737,17 +728,13 @@ def page_strategies() -> None:
 def page_health() -> None:
     st.header("System Health")
     services, services_err = _fetch("/api/bot/health/services")
-    latest, latest_err = _fetch("/api/bot/health/latest")
+    latest, latest_err     = _fetch("/api/bot/health/latest")
 
     st.subheader("Systemd services")
     if services_err:
         st.warning(services_err)
     elif services and services.get("services"):
-        st.dataframe(
-            pd.DataFrame(services["services"]),
-            hide_index=True,
-            use_container_width=True,
-        )
+        st.dataframe(pd.DataFrame(services["services"]), hide_index=True, use_container_width=True)
     else:
         st.caption("No service data.")
 
@@ -757,9 +744,9 @@ def page_health() -> None:
     elif latest and latest.get("present") and latest.get("snapshot"):
         snap = latest["snapshot"]
         s1, s2, s3 = st.columns(3)
-        s1.metric("CPU", fmt_pct(snap.get("cpu_percent")))
+        s1.metric("CPU",    fmt_pct(snap.get("cpu_percent")))
         s2.metric("Memory", fmt_pct(snap.get("memory_percent")))
-        s3.metric("Disk", fmt_pct(snap.get("disk_percent")))
+        s3.metric("Disk",   fmt_pct(snap.get("disk_percent")))
         with st.expander("Raw snapshot"):
             st.json(snap)
     else:
@@ -777,9 +764,7 @@ def page_logs() -> None:
     if not rows:
         st.caption("No log entries.")
         return
-    st.dataframe(
-        pd.DataFrame(rows), hide_index=True, use_container_width=True, height=600
-    )
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True, height=600)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -789,16 +774,16 @@ def main() -> None:
     stats, stats_err = _fetch("/api/bot/stats")
 
     dispatch = {
-        "Overview": lambda: page_overview(stats, stats_err),
-        "Live Chart": page_chart,
-        "Positions": page_positions,
-        "Signals": page_signals,
+        "Overview":      lambda: page_overview(stats, stats_err),
+        "Live Chart":    page_chart,
+        "Positions":     page_positions,
+        "Signals":       page_signals,
         "Closed Trades": page_trades,
-        "Models": page_models,
-        "Backtesting": page_backtesting,
-        "Strategies": page_strategies,
-        "Health": page_health,
-        "Logs": page_logs,
+        "Models":        page_models,
+        "Backtesting":   page_backtesting,
+        "Strategies":    page_strategies,
+        "Health":        page_health,
+        "Logs":          page_logs,
     }
     dispatch.get(page, page_overview)()  # type: ignore[operator]
 
