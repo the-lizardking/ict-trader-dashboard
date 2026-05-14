@@ -973,11 +973,13 @@ def page_models() -> None:
         sessions = (sess_payload or {}).get("sessions", [])
         ok = [s for s in sessions if s.get("status") == "manifest_ok"]
         bad = [s for s in sessions if s.get("status") == "manifest_failed"]
+        skipped = [s for s in sessions if s.get("status") == "manifest_skipped"]
         missing = [s for s in sessions if s.get("status") == "manifest_missing"]
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Manifest OK (recent)", len(ok))
         c2.metric("Manifest failed", len(bad))
-        c3.metric("Manifest missing", len(missing))
+        c3.metric("Manifest skipped", len(skipped))
+        c4.metric("Manifest missing", len(missing))
         if bad:
             with st.expander(f"Recent failed manifests ({len(bad)})", expanded=True):
                 for row in bad[-10:]:
@@ -985,6 +987,19 @@ def page_models() -> None:
                         f"**{row.get('manifest', '?')}** "
                         f"(rc={row.get('exit_code', '?')}, {row.get('ts', '?')}) — "
                         f"`{(row.get('stderr_tail') or '').strip()[:240]}`"
+                    )
+        if skipped:
+            # Skipped is not a failure — render as info, not red.
+            # Common reason today: dataset has 0 rows (live trader hasn't
+            # produced enough closed-trade history yet, or no health-review
+            # answers exist for the review_journal family).
+            with st.expander(f"Recently skipped manifests ({len(skipped)})"):
+                for row in skipped[-10:]:
+                    reason = row.get("reason") or "skipped"
+                    detail = row.get("detail") or row.get("dataset_path") or ""
+                    st.info(
+                        f"**{row.get('manifest', '?')}** "
+                        f"({row.get('ts', '?')}) — {reason}: `{detail}`"
                     )
 
     st.divider()
