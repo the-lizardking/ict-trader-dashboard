@@ -1,0 +1,29 @@
+{
+  "name": "ICT Trader Widget",
+  "short_name": "ICT Live",
+  "description": "Live P&L, system health dots, and 24h trade log for the ICT trading bot.",
+  "start_url": "/?source=pwa",
+  "scope": "/",
+  "id": "/?source=pwa",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#050c1a",
+  "theme_color": "#050c1a",
+  "categories": ["finance", "productivity"],
+  "icons": [
+    {
+      "src": "/static/pwa/icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open Dashboard",
+      "short_name": "Dashboard",
+      "url": "https://ict-trader.streamlit.app/"
+    }
+  ]
+}

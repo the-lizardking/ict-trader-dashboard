@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ICT Trader Widget</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#050c1a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="ICT Live">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/static/pwa/icons/icon.svg">
+  <link rel="apple-touch-icon" href="/static/pwa/icons/icon.svg">
+  <link rel="stylesheet" href="/static/pwa/style.css">
+</head>
+<body>
+  <main id="widget" class="widget loading" aria-live="polite">
+    <header class="head">
+      <div class="pnl" data-bind="pnl"><span>—</span><small>24h P&amp;L</small></div>
+      <div class="status" data-bind="status" data-state="unknown">…</div>
+    </header>
+    <section class="systems" data-bind="systems" aria-label="Systems health"></section>
+    <section class="log" aria-label="Closed trades (24h)">
+      <table>
+        <thead><tr><th>Time</th><th>Sym</th><th>Side</th><th>Sz</th><th>P&amp;L</th></tr></thead>
+        <tbody data-bind="trades"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+      </table>
+    </section>
+    <footer class="foot">
+      <span data-bind="updated">syncing…</span>
+      <span class="dot" data-bind="liveDot" aria-hidden="true"></span>
+    </footer>
+  </main>
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => { /* SW optional */ });
+    }
+  </script>
+  <script src="/static/pwa/app.js" defer></script>
+</body>
+</html>
