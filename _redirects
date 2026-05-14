@@ -1,0 +1,9 @@
+# Cloudflare Pages routing for the home-screen widget.
+# CF Pages Functions in functions/api/* are matched before these static rules,
+# so /api/widget and /api/widget.json hit the JS aggregator, while "/" and the
+# PWA shell paths rewrite to the static files under static/pwa/.
+
+/                /static/pwa/index.html      200
+/widget          /static/pwa/index.html      200
+/manifest.json   /static/pwa/manifest.json   200
+/sw.js           /static/pwa/sw.js           200
