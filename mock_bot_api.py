@@ -268,71 +268,124 @@ class MockBotHandler(BaseHTTPRequestHandler):
                 })
             return runs
 
-        if path == "/api/bot/ml/sessions":
+        # ── Training-center mirror endpoints (S-AI-WS8-PART-2) ──────
+        # Surface trainer-VM state via a small local mirror; same
+        # contract as src/web/api/routers/training_center.py in the
+        # ict-trading-bot repo. The default mock simulates the real
+        # 2026-05-14 production state (trainer idle, never run a
+        # successful cycle, dataset builds failing) so the dashboard
+        # renders the actual UX the operator will see.
+        _MIRROR_META = {
+            "mirror_path": "/mock/runtime_logs/trainer_mirror",
+            "mirror_present": True,
+            "trainer_status_present": True,
+            "mirror_age_seconds": 47.0,
+        }
+
+        if path == "/api/bot/ml/status":
             return {
-                "sessions": [
-                    {
-                        "session_id": "sess-001",
-                        "model_id": "ict-entry-clf-v3",
-                        "trainer": "ml.trainers.gradient_boost.train",
-                        "dataset": "candles/BTCUSDT/15m/v4",
-                        "target_stage": "candidate",
-                        "status": "running",
-                        "elapsed_seconds": 1847,
-                        "current_epoch": 42,
-                        "total_epochs": 100,
-                        "started_at": datetime.now().isoformat(),
+                **_MIRROR_META,
+                "status": {
+                    "ts": datetime.utcnow().isoformat() + "+00:00",
+                    "trainer_vm": {
+                        "ip": "158.178.209.121",
+                        "role": "training-center",
+                        "uname": "Linux ict-trainer-vm 6.8.0-1049-oracle aarch64",
+                        "uptime_seconds": 253980,
+                        "load_1m": 0.0,
+                        "head_sha": "8462f32",
                     },
-                    {
-                        "session_id": "sess-000",
-                        "model_id": "ict-entry-clf-v2",
-                        "trainer": "ml.trainers.gradient_boost.train",
-                        "dataset": "candles/BTCUSDT/15m/v3",
-                        "target_stage": "backtest_approved",
-                        "status": "completed",
-                        "elapsed_seconds": 5400,
-                        "started_at": (datetime.now() - timedelta(hours=3)).isoformat(),
-                        "eval_accuracy": 0.674,
-                        "eval_f1": 0.651,
+                    "service": {
+                        "unit": "ict-trainer.service",
+                        "active_state": "inactive",
+                        "sub_state": "dead",
+                        "unit_file_state": "disabled",
+                        "active_enter_iso": None,
                     },
-                ]
+                    "timer": {
+                        "unit": "ict-trainer.timer",
+                        "active_state": "inactive",
+                        "sub_state": "dead",
+                        "unit_file_state": "disabled",
+                        "next_elapse_iso": None,
+                        "last_trigger_iso": None,
+                    },
+                    "last_cycle": None,
+                    "last_cycle_outcome": None,
+                    "cycles_24h": 0,
+                    "manifests_24h": {"ok": 0, "failed": 0, "missing": 0},
+                    "dataset_builds_24h": {
+                        "ok": 0,
+                        "failed": 5,
+                        "skipped": 1,
+                        "last_overall_rc": 1,
+                        "last_ts": "2026-05-13T15:47:19+00:00",
+                    },
+                    "registry": {"models": 0, "rows": 0, "stages": {}, "path_present": False},
+                    "data_pulls": {
+                        "last_ok_ts": "2026-05-13T15:47:16+00:00",
+                        "last_signal_audit_lines": 9567,
+                    },
+                },
             }
 
+        if path == "/api/bot/ml/cycle":
+            return {**_MIRROR_META, "limit": 100, "rows": []}
+
+        if path == "/api/bot/ml/sessions":
+            return {**_MIRROR_META, "limit": 50, "sessions": []}
+
         if path == "/api/bot/ml/registry":
+            return {**_MIRROR_META, "rows": [], "count": 0}
+
+        if path == "/api/bot/ml/builds":
             return {
-                "models": [
-                    {
-                        "model_id": "ict-entry-clf-v2",
-                        "model_family": "gradient_boost",
-                        "trainer": "ml.trainers.gradient_boost.train",
-                        "evaluator": "ml.evaluators.classification.evaluate",
-                        "target_deployment_stage": "shadow",
-                        "dataset": {
-                            "family": "candles",
-                            "symbol_scope": "BTCUSDT",
-                            "timeframe": "15m",
-                            "version": "v3",
-                        },
-                        "trainer_config": {"n_estimators": 500, "max_depth": 6, "learning_rate": 0.05},
-                        "notes": "Best candidate so far; 67.4% accuracy on holdout.",
-                    },
-                    {
-                        "model_id": "ict-entry-clf-v1",
-                        "model_family": "logistic_regression",
-                        "trainer": "ml.trainers.logistic.train",
-                        "evaluator": "ml.evaluators.classification.evaluate",
-                        "target_deployment_stage": "research_only",
-                        "dataset": {
-                            "family": "candles",
-                            "symbol_scope": "BTCUSDT",
-                            "timeframe": "15m",
-                            "version": "v2",
-                        },
-                        "trainer_config": {"C": 1.0, "max_iter": 1000},
-                        "notes": "Baseline model; superseded by v2.",
-                    },
-                ]
+                **_MIRROR_META,
+                "limit": 100,
+                "rows": [
+                    {"ts": "2026-05-13T15:47:18+00:00", "status": "building", "family": "setup_labels"},
+                    {"ts": "2026-05-13T15:47:18+00:00", "status": "failed", "family": "setup_labels",
+                     "exit_code": 1,
+                     "stderr_tail": "if risk_pct <= 0: TypeError: '<=' not supported between instances of 'str' and 'int'"},
+                    {"ts": "2026-05-13T15:47:18+00:00", "status": "building", "family": "setup_labels_audit"},
+                    {"ts": "2026-05-13T15:47:18+00:00", "status": "failed", "family": "setup_labels_audit",
+                     "exit_code": 1,
+                     "stderr_tail": "if risk_pct <= 0: TypeError: '<=' not supported between instances of 'str' and 'int'"},
+                    {"ts": "2026-05-13T15:47:18+00:00", "status": "building", "family": "review_journal"},
+                    {"ts": "2026-05-13T15:47:19+00:00", "status": "failed", "family": "review_journal",
+                     "exit_code": 1,
+                     "stderr_tail": "if not comms_root.is_dir(): AttributeError: 'str' object has no attribute 'is_dir'"},
+                    {"ts": "2026-05-13T15:47:19+00:00", "status": "building", "family": "market_raw"},
+                    {"ts": "2026-05-13T15:47:19+00:00", "status": "failed", "family": "market_raw",
+                     "exit_code": 1,
+                     "stderr_tail": "DatasetBuilder.build() got multiple values for keyword argument 'timeframe'"},
+                    {"ts": "2026-05-13T15:47:19+00:00", "status": "skipped", "family": "market_features",
+                     "detail": "market_raw path not found; regime-classifier baseline skipped"},
+                    {"ts": "2026-05-13T15:47:19+00:00", "status": "build_end", "overall_rc": 1},
+                ],
             }
+
+        if path == "/api/bot/ml/db_pulls":
+            return {
+                **_MIRROR_META,
+                "limit": 20,
+                "rows": [
+                    {"ts": "2026-05-13T15:47:14+00:00", "status": "pulling",
+                     "artifact": "trade_journal.db",
+                     "src": "ubuntu@158.178.210.252:/home/ubuntu/ict-trading-bot/trade_journal.db"},
+                    {"ts": "2026-05-13T15:47:15+00:00", "status": "ok",
+                     "artifact": "trade_journal.db", "size_bytes": 4657152},
+                    {"ts": "2026-05-13T15:47:16+00:00", "status": "ok",
+                     "artifact": "signal_audit.jsonl", "lines": 9567},
+                    {"ts": "2026-05-13T15:47:16+00:00", "status": "sync_done",
+                     "overall_rc": 0,
+                     "data_dir": "/home/ubuntu/ict-trading-bot/data"},
+                ],
+            }
+
+        if path.startswith("/api/bot/ml/runs/"):
+            # Per-run drill-down is 404 in the simulated empty-registry case.
+            return None
 
         return None
 

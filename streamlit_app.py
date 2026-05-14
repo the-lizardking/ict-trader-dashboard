@@ -739,108 +739,284 @@ _STAGE_ICON = {
 }
 
 
-def page_models() -> None:
-    st.header("Models & Training")
+def _fmt_age(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "—"
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m {s % 60}s"
+    if s < 86400:
+        return f"{s // 3600}h {(s % 3600) // 60}m"
+    return f"{s // 86400}d {(s % 86400) // 3600}h"
 
-    st.subheader("VM Trainer Sessions")
-    sessions, sessions_err = _fetch("/api/bot/ml/sessions")
 
-    if sessions_err:
-        st.info(
-            "Training session endpoint not yet available — "
-            "will populate once the VM trainer exposes `/api/bot/ml/sessions`."
+def _trainer_status_banner(payload: dict) -> None:
+    """Top-of-page banner summarizing trainer VM state.
+
+    Renders a colored callout based on the worst-of:
+    - mirror missing → red ("trainer never published")
+    - mirror present but stale (> 10 min) → yellow ("trainer silent")
+    - service inactive + zero cycles_24h → yellow ("trainer idle, never ran")
+    - cycles_24h > 0 and last_cycle_outcome == 0 → green ("healthy")
+    - cycles_24h > 0 and last_cycle_outcome != 0 → red ("last cycle failed")
+    """
+    if not payload.get("mirror_present"):
+        st.error(
+            "🛑 **Trainer mirror missing.** The trainer VM has never published "
+            "state, or the publisher (`ict-trainer-publish.timer`) is not "
+            "running. Until it does, this page has no visibility."
         )
-        with st.expander("What will appear here once wired up"):
-            st.markdown("""
-- **Active runs** — model ID, trainer, dataset, elapsed time, epoch progress bar
-- **Completed sessions** — final eval metrics and deployment stage reached
-- **Failed runs** — error summary and last log line
-            """)
+        return
+
+    status = payload.get("status") or {}
+    age = payload.get("mirror_age_seconds")
+    age_str = _fmt_age(age)
+
+    svc = (status.get("service") or {})
+    timer = (status.get("timer") or {})
+    last_cycle = status.get("last_cycle") or {}
+    last_rc = status.get("last_cycle_outcome")
+    cycles_24h = status.get("cycles_24h", 0)
+
+    svc_active = svc.get("active_state")
+    svc_enabled = svc.get("unit_file_state")
+    timer_state = timer.get("active_state")
+
+    is_stale = age is not None and age > 600  # 10 min
+    is_idle = cycles_24h == 0 and svc_active != "active"
+    last_failed = isinstance(last_rc, int) and last_rc != 0
+
+    cols = st.columns(4)
+    cols[0].metric("Mirror age", age_str)
+    cols[1].metric("Cycles (24 h)", cycles_24h)
+    cols[2].metric("Service", f"{svc_active or '?'} / {svc_enabled or '?'}")
+    cols[3].metric("Timer", timer_state or "—")
+
+    if is_stale:
+        st.error(f"⏳ **Trainer silent** — last publish was {age_str} ago. "
+                 "Check `ict-trainer-publish.timer` on the trainer VM.")
+    elif is_idle:
+        st.warning(
+            f"💤 **Trainer idle.** `ict-trainer.service` is `{svc_active}` "
+            f"(unit file `{svc_enabled}`) and no training cycle ran in the "
+            "last 24 h. To enable: `sudo systemctl enable --now "
+            "ict-trainer.service` on the trainer VM."
+        )
+    elif last_failed:
+        st.error(
+            f"❌ **Last cycle failed** at {last_cycle.get('ts', '?')} with rc={last_rc}. "
+            "See the Cycle Events table below for which manifest tripped."
+        )
     else:
-        sessions_list: list = (
-            sessions if isinstance(sessions, list)
-            else (sessions or {}).get("sessions", [])
+        st.success(
+            f"✅ Trainer healthy — last publish {age_str} ago, "
+            f"{cycles_24h} cycle(s) in 24 h."
         )
-        active = [s for s in sessions_list if s.get("status") == "running"]
-        done   = [s for s in sessions_list if s.get("status") == "completed"]
-        failed = [s for s in sessions_list if s.get("status") == "failed"]
 
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Active", len(active))
-        c2.metric("Completed", len(done))
-        c3.metric("Failed", len(failed))
+    head_sha = (status.get("trainer_vm") or {}).get("head_sha")
+    role = (status.get("trainer_vm") or {}).get("role")
+    if head_sha or role:
+        st.caption(f"Trainer VM: `{role or '?'}` · repo HEAD `{head_sha or '?'}`")
 
-        if active:
-            st.markdown("**Active runs**")
-            for sess in active:
-                with st.container(border=True):
-                    left, right = st.columns([3, 1])
-                    with left:
-                        st.markdown(f"**{sess.get('model_id', '?')}** · `{sess.get('trainer', '?')}`")
-                        st.caption(
-                            f"Dataset: {sess.get('dataset', '?')} · "
-                            f"Stage: {sess.get('target_stage', '?')}"
-                        )
-                    with right:
-                        elapsed = sess.get("elapsed_seconds", 0)
-                        st.metric("Elapsed", f"{int(elapsed // 60)}m {int(elapsed % 60)}s")
-                    epoch = sess.get("current_epoch")
-                    total = sess.get("total_epochs")
-                    if epoch and total:
-                        st.progress(epoch / total, text=f"Epoch {epoch}/{total}")
 
-        if done:
-            with st.expander(f"Completed sessions ({len(done)})"):
-                st.dataframe(pd.DataFrame(done), hide_index=True, use_container_width=True)
+def _render_cycle_events(rows: list[dict]) -> None:
+    if not rows:
+        st.caption("No cycle events mirrored yet.")
+        return
+    df = pd.DataFrame(rows)
+    show_cols = [c for c in (
+        "ts", "status", "manifest", "model_id", "exit_code",
+        "overall_rc", "head", "stderr_tail",
+    ) if c in df.columns]
+    if not show_cols:
+        st.dataframe(df, hide_index=True, use_container_width=True)
+        return
+    # Newest first for the table.
+    df = df[show_cols].iloc[::-1].reset_index(drop=True)
+    st.dataframe(df, hide_index=True, use_container_width=True, height=320)
 
-        if failed:
-            with st.expander(f"Failed runs ({len(failed)})", expanded=True):
-                for sess in failed:
-                    st.error(f"**{sess.get('model_id', '?')}** — {sess.get('error', 'unknown error')}")
 
-    st.divider()
+def _render_build_health(rows: list[dict]) -> None:
+    if not rows:
+        st.caption("No dataset-build events mirrored yet.")
+        return
+    failed = [r for r in rows if r.get("status") == "failed"]
+    skipped = [r for r in rows if r.get("status") == "skipped"]
+    if failed:
+        st.error(f"❌ {len(failed)} dataset build failure(s) in the recent log. "
+                 "These block the manifests that depend on them.")
+        for row in failed[-5:]:  # newest 5
+            family = row.get("family", "?")
+            tail = (row.get("stderr_tail") or "").strip()
+            st.markdown(f"- **{family}** ({row.get('ts', '?')}) — `{tail[:200]}`")
+    if skipped:
+        with st.expander(f"Skipped families ({len(skipped)})"):
+            for row in skipped[-10:]:
+                st.markdown(
+                    f"- **{row.get('family', '?')}** ({row.get('ts', '?')}) — "
+                    f"{row.get('detail', '?')}"
+                )
+    df = pd.DataFrame(rows)
+    show_cols = [c for c in ("ts", "status", "family", "exit_code", "stderr_tail", "detail")
+                 if c in df.columns]
+    if show_cols:
+        with st.expander(f"Full build log ({len(rows)} rows)"):
+            st.dataframe(df[show_cols].iloc[::-1].reset_index(drop=True),
+                         hide_index=True, use_container_width=True, height=240)
 
-    st.subheader("Model Registry")
-    registry, registry_err = _fetch("/api/bot/ml/registry")
 
-    if registry_err:
-        st.info("Model registry endpoint not yet available.")
+def _render_registry(registry_rows: list[dict]) -> None:
+    if not registry_rows:
+        st.info(
+            "📭 **Model registry is empty.** No model has been promoted into "
+            "`ml/registry-store/registry.jsonl` yet. This is expected on a "
+            "trainer that has not completed a successful training cycle."
+        )
         return
 
-    models: list = (
-        registry if isinstance(registry, list)
-        else (registry or {}).get("models", [])
-    )
-    if not models:
-        st.caption("No models registered yet.")
-        return
+    # Group by model_id (the registry is append-only with a row per
+    # stage-history event in the canonical schema, but baselines also
+    # write one row per registration).
+    by_model: dict[str, list[dict]] = {}
+    for row in registry_rows:
+        mid = row.get("model_id") or "?"
+        by_model.setdefault(mid, []).append(row)
 
-    for model in models:
-        stage    = model.get("target_deployment_stage", "unknown")
-        icon     = _STAGE_ICON.get(stage, "❔")
-        model_id = model.get("model_id", "?")
-        family   = model.get("model_family", "?")
+    st.caption(f"{len(by_model)} distinct model(s) across {len(registry_rows)} registry row(s).")
 
+    for model_id, rows in sorted(by_model.items()):
+        latest = rows[-1]
+        stage = latest.get("target_deployment_stage") or latest.get("stage") or "unknown"
+        icon = _STAGE_ICON.get(stage, "❔")
+        family = latest.get("model_family") or latest.get("family") or "?"
         with st.expander(f"{icon} {model_id} · {family} · `{stage}`"):
             m1, m2, m3 = st.columns(3)
-            m1.metric("Trainer",   model.get("trainer",   "?").split(".")[-1])
-            m2.metric("Evaluator", model.get("evaluator", "?").split(".")[-1])
+            trainer = (latest.get("trainer") or "?")
+            evaluator = (latest.get("evaluator") or "?")
+            m1.metric("Trainer", trainer.split(".")[-1] if isinstance(trainer, str) else "?")
+            m2.metric("Evaluator", evaluator.split(".")[-1] if isinstance(evaluator, str) else "?")
             m3.metric("Stage", stage)
-
-            ds = model.get("dataset") or {}
-            if ds:
+            ds = latest.get("dataset") or latest.get("dataset_ref") or {}
+            if isinstance(ds, dict) and ds:
                 st.markdown(
                     f"**Dataset:** `{ds.get('family')}/{ds.get('symbol_scope')}"
                     f"/{ds.get('timeframe')}/{ds.get('version')}`"
                 )
+            notes = latest.get("notes")
+            if notes:
+                st.caption(notes)
 
-            if model.get("notes"):
-                st.caption(model["notes"])
+            # Per-run metrics drill-down. The cycle log records
+            # metrics_path like
+            # "ml/experiments-runs/<model_id>/<run_id>/metrics.json".
+            run_id = (
+                latest.get("run_id")
+                or (latest.get("metrics_path") or "").split("/")[-2]
+                or None
+            )
+            if run_id:
+                run_payload, run_err = _fetch(f"/api/bot/ml/runs/{model_id}/{run_id}")
+                if run_err:
+                    st.caption(f"Run metrics: not mirrored yet ({run_err})")
+                else:
+                    metrics = (run_payload or {}).get("metrics") or {}
+                    if metrics:
+                        st.markdown("**Latest run metrics**")
+                        st.json(metrics)
 
-            cfg = model.get("trainer_config") or {}
+            cfg = latest.get("trainer_config") or {}
             if cfg:
                 with st.expander("Trainer config"):
                     st.json(cfg)
+
+            if len(rows) > 1:
+                with st.expander(f"Stage history ({len(rows)} rows)"):
+                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+
+def page_models() -> None:
+    st.header("Models & Training Center")
+
+    status_payload, status_err = _fetch("/api/bot/ml/status")
+    if status_err:
+        st.warning(
+            f"Trainer status endpoint unreachable: {status_err}. "
+            "This usually means the bot's FastAPI is older than the "
+            "S-AI-WS8-PART-2 wiring — make sure `/api/bot/ml/status` is "
+            "served from `src/web/api/routers/training_center.py`."
+        )
+        return
+
+    _trainer_status_banner(status_payload or {})
+
+    st.divider()
+
+    # ── Cycle events ────────────────────────────────────────────────
+    st.subheader("Cycle Events")
+    cycle_payload, cycle_err = _fetch("/api/bot/ml/cycle?limit=100")
+    if cycle_err:
+        st.caption(f"Cycle log unavailable ({cycle_err}).")
+    else:
+        rows = (cycle_payload or {}).get("rows", [])
+        _render_cycle_events(rows)
+
+    # ── Per-manifest sessions ───────────────────────────────────────
+    sess_payload, sess_err = _fetch("/api/bot/ml/sessions")
+    if not sess_err:
+        sessions = (sess_payload or {}).get("sessions", [])
+        ok = [s for s in sessions if s.get("status") == "manifest_ok"]
+        bad = [s for s in sessions if s.get("status") == "manifest_failed"]
+        missing = [s for s in sessions if s.get("status") == "manifest_missing"]
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Manifest OK (recent)", len(ok))
+        c2.metric("Manifest failed", len(bad))
+        c3.metric("Manifest missing", len(missing))
+        if bad:
+            with st.expander(f"Recent failed manifests ({len(bad)})", expanded=True):
+                for row in bad[-10:]:
+                    st.error(
+                        f"**{row.get('manifest', '?')}** "
+                        f"(rc={row.get('exit_code', '?')}, {row.get('ts', '?')}) — "
+                        f"`{(row.get('stderr_tail') or '').strip()[:240]}`"
+                    )
+
+    st.divider()
+
+    # ── Dataset build health ────────────────────────────────────────
+    st.subheader("Dataset Build Health")
+    builds_payload, builds_err = _fetch("/api/bot/ml/builds?limit=100")
+    if builds_err:
+        st.caption(f"Build log unavailable ({builds_err}).")
+    else:
+        _render_build_health((builds_payload or {}).get("rows", []))
+
+    # ── DB pull freshness ───────────────────────────────────────────
+    pulls_payload, pulls_err = _fetch("/api/bot/ml/db_pulls?limit=20")
+    if not pulls_err:
+        pull_rows = (pulls_payload or {}).get("rows", [])
+        last_done = next(
+            (r for r in reversed(pull_rows)
+             if r.get("status") == "sync_done" and r.get("overall_rc") == 0),
+            None,
+        )
+        if last_done:
+            st.caption(
+                f"Last live-VM → trainer DB sync: **{last_done.get('ts', '?')}**"
+            )
+        elif pull_rows:
+            st.caption("DB sync history present but no successful `sync_done` row.")
+
+    st.divider()
+
+    # ── Model registry ──────────────────────────────────────────────
+    st.subheader("Model Registry")
+    registry_payload, registry_err = _fetch("/api/bot/ml/registry")
+    if registry_err:
+        st.caption(f"Registry unavailable ({registry_err}).")
+        return
+    _render_registry((registry_payload or {}).get("rows", []))
 
 
 # ── Backtesting ──────────────────────────────────────────────────────────────────
