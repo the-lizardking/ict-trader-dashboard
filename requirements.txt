@@ -3,3 +3,4 @@ requests>=2.31
 pandas>=2.0
 plotly>=5.17
 yfinance>=0.2
+streamlit-lightweight-charts>=0.7
