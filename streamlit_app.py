@@ -246,9 +246,10 @@ def _lc_markers(
 ) -> list[dict]:
     """Build a sorted Lightweight Charts marker list from signals and closed trades.
 
+    Signal direction: accepts both "direction" (LONG/SHORT) and "side" (buy/sell).
+    Trade timestamps: accepts both openedAt/closedAt and openTime/closeTime.
     Marker shapes: arrowUp / arrowDown / circle / square
-    Positions: belowBar / aboveBar / inBar
-    To change colors or shapes, edit the dicts below.
+    Positions:     belowBar / aboveBar / inBar
     """
     markers: list[dict] = []
 
@@ -261,8 +262,10 @@ def _lc_markers(
             sdf["ts_utc"] = pd.to_datetime(sdf["timestamp"], errors="coerce", utc=True)
             sdf = sdf.dropna(subset=["ts_utc"])
             for _, row in sdf.iterrows():
-                side = str(row.get("side", "buy")).lower()
-                is_long = side == "buy"
+                # Resolve direction: "direction" field (LONG/SHORT) takes priority,
+                # fall back to "side" field (buy/sell) for other API shapes.
+                raw_dir = str(row.get("direction", row.get("side", "buy"))).lower()
+                is_long = raw_dir in ("long", "buy")
                 markers.append({
                     "time":     int(row["ts_utc"].timestamp()),
                     "position": "belowBar" if is_long else "aboveBar",
@@ -275,12 +278,15 @@ def _lc_markers(
         tdf = pd.DataFrame(trades)
         if "symbol" in tdf.columns:
             tdf = tdf[tdf["symbol"] == symbol]
-        pnl_col = "realizedPnl" if "realizedPnl" in tdf.columns else None
+        pnl_col   = "realizedPnl" if "realizedPnl" in tdf.columns else None
+        # Accept both field-name conventions from different API versions
+        open_col  = next((c for c in ("openedAt",  "openTime")  if c in tdf.columns), None)
+        close_col = next((c for c in ("closedAt",  "closeTime") if c in tdf.columns), None)
 
         # Entry markers (blue circle below bar)
-        if not tdf.empty and {"openedAt", "entryPrice"}.issubset(tdf.columns):
+        if not tdf.empty and open_col and "entryPrice" in tdf.columns:
             sub = tdf.copy()
-            sub["ts_utc"] = pd.to_datetime(sub["openedAt"], errors="coerce", utc=True)
+            sub["ts_utc"] = pd.to_datetime(sub[open_col], errors="coerce", utc=True)
             sub = sub.dropna(subset=["ts_utc"])
             for _, row in sub.iterrows():
                 markers.append({
@@ -292,9 +298,9 @@ def _lc_markers(
                 })
 
         # Exit markers (green/red arrow above bar)
-        if not tdf.empty and {"closedAt", "exitPrice"}.issubset(tdf.columns):
+        if not tdf.empty and close_col and "exitPrice" in tdf.columns:
             sub = tdf.copy()
-            sub["ts_utc"] = pd.to_datetime(sub["closedAt"], errors="coerce", utc=True)
+            sub["ts_utc"] = pd.to_datetime(sub[close_col], errors="coerce", utc=True)
             sub = sub.dropna(subset=["ts_utc"])
             for _, row in sub.iterrows():
                 pnl = row.get(pnl_col, 0) if pnl_col else 0
@@ -353,6 +359,20 @@ def render_overview_chart(
                 "timeVisible":    True,
                 "secondsVisible": False,
             },
+            # Touch / mobile: enable horizontal drag and pinch-to-zoom.
+            # vertTouchDrag=False prevents the chart stealing page scroll.
+            "handleScroll": {
+                "mouseWheel":       True,
+                "pressedMouseMove": True,
+                "horzTouchDrag":    True,
+                "vertTouchDrag":    False,
+            },
+            "handleScale": {
+                "axisPressedMouseMove": True,
+                "axisDoubleClickReset": True,
+                "mouseWheel":           True,
+                "pinch":                True,
+            },
         },
         "series": [{
             "type": "Candlestick",
@@ -396,11 +416,13 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 
     # ── Price chart ─────────────────────────────────────────────────────────────
     st.subheader("Price Overview")
-    oc1, oc2, oc3, oc4 = st.columns([2, 2, 1, 1])
+    # Two rows of two so controls stack cleanly on narrow / mobile screens
+    oc1, oc2 = st.columns(2)
     with oc1:
         ov_symbol   = st.selectbox("Symbol",   CHART_SYMBOLS,   key="ov_symbol")
     with oc2:
         ov_interval = st.selectbox("Interval", CHART_INTERVALS, index=2, key="ov_interval")
+    oc3, oc4, _ = st.columns([1, 1, 4])
     with oc3:
         ov_signals  = st.toggle("Signals", value=True, key="ov_signals")
     with oc4:
@@ -442,14 +464,14 @@ def page_overview(stats: dict | None, stats_err: str | None) -> None:
 
 # ── Live Chart ─────────────────────────────────────────────────────────────────
 
-CHART_SYMBOLS  = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
+CHART_SYMBOLS   = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"]
 CHART_INTERVALS = list(_YF_PARAMS.keys())
 
 
 def page_chart() -> None:
     st.header("Live Chart")
 
-    # ── Controls ──────────────────────────────────────────────────────────────
+    # ── Controls ─────────────────────────────────────────────────────────────
     r1c1, r1c2 = st.columns([3, 2])
     with r1c1:
         symbol = st.selectbox("Symbol", CHART_SYMBOLS)
@@ -486,7 +508,6 @@ def page_chart() -> None:
         row_heights=[0.75, 0.25],
     )
 
-    # Candlesticks
     fig.add_trace(go.Candlestick(
         x=df["timestamp"],
         open=df["open"], high=df["high"],
