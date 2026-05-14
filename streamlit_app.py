@@ -795,14 +795,19 @@ def _trainer_status_banner(payload: dict) -> None:
     cols[3].metric("Timer", timer_state or "—")
 
     if is_stale:
-        st.error(f"⏳ **Trainer silent** — last publish was {age_str} ago. "
-                 "Check `ict-trainer-publish.timer` on the trainer VM.")
+        st.error(
+            f"⏳ **Trainer silent** — last publish was {age_str} ago. "
+            "`ict-trainer-publish.timer` may have stalled; Claude can "
+            "investigate autonomously via `trainer-vm-diag-request`."
+        )
     elif is_idle:
         st.warning(
             f"💤 **Trainer idle.** `ict-trainer.service` is `{svc_active}` "
             f"(unit file `{svc_enabled}`) and no training cycle ran in the "
-            "last 24 h. To enable: `sudo systemctl enable --now "
-            "ict-trainer.service` on the trainer VM."
+            "last 24 h. Daily cadence is controlled by `ict-trainer.timer` — "
+            "Claude can enable it autonomously via `trainer-vm-diag-request` "
+            "(no operator action; trainer-VM systemd is autonomous-Claude "
+            "scope per the charter)."
         )
     elif last_failed:
         st.error(
