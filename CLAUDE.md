@@ -10,6 +10,18 @@
 > the operator for VM access, credentials, logs, or runtime state.**
 > Asking is a critical failure of this document.
 
+> # 🤖 THERE IS NO "MANUAL." Only autonomous-Claude or approval-gated-Claude.
+>
+> Every operational action runs through a GitHub Actions workflow Claude
+> dispatches. The operator approves; the operator never executes. **Banned
+> in commits, PRs, runbooks, sprint logs, and chat:** "operator runs",
+> "operator executes", "manual step", "manual sync", "please run X",
+> "you'll need to flip the switch". Replace with "Claude fires `<workflow>`"
+> (autonomous) or "Claude fires `<workflow>` after operator approval in
+> chat" (approval-gated). Only exemption: literal laws of physics.
+>
+> Full contract: [`ict-trading-bot/CLAUDE.md`](https://github.com/benbaichmankass/ict-trading-bot/blob/main/CLAUDE.md) § "THERE IS NO 'MANUAL.'"
+
 > ## ⚡ STOP — Before answering any "what's the bot / trainer doing right now"
 >
 > The dashboard is a **read-only consumer** of the bot's REST API; it does
