@@ -22,7 +22,10 @@ import requests
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 
-BOT_API = os.environ.get("BOT_API_URL", "http://158.178.210.252:8001")
+# Fail fast if BOT_API_URL is not set. A missing env var produces a clear
+# KeyError at cold-start rather than silently routing preview deployments
+# to the production VM over plain HTTP (audit finding H-DASH-02).
+BOT_API = os.environ["BOT_API_URL"]
 TIMEOUT_S = 6.0
 TRADES_LIMIT = 50
 
@@ -51,7 +54,11 @@ def _service_up(services: list[dict] | None, hints: tuple[str, ...]) -> bool | N
         if not any(h in name for h in hints):
             continue
         matched = True
-        state = (svc.get("active_state") or svc.get("state") or "").lower()
+        # Accept active_state (live bot API), state (some monitoring
+        # endpoints), or status (mock_bot_api.py dev server).
+        state = (
+            svc.get("active_state") or svc.get("state") or svc.get("status") or ""
+        ).lower()
         if state == "active":
             return True
     return False if matched else None
