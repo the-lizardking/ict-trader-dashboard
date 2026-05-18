@@ -738,6 +738,51 @@ _STAGE_ICON = {
     "backtest_approved": "\U0001f7e4", "candidate": "⚪", "research_only": "⚫",
 }
 
+# Operator's 2-bucket deployment view (2026-05-18). Collapses the 7
+# registry stages into "is this model influencing real money or just
+# observing?":
+#   LIVE    — predictions influence trade decisions on live accounts.
+#   SHADOW  — predictions logged in real time but decisions unchanged.
+#   OFFLINE — model exists in the registry but no strategy references it.
+#
+# Source of truth: the bot's /api/bot/ml/registry endpoint returns
+# ``deployment_bucket`` per row (PR #1391). The dashboard prefers that
+# field but falls back to a legacy stage→bucket mapping when the bot
+# API hasn't been upgraded yet — this keeps the dashboard rendering
+# correctly during a rollout window.
+_BUCKET_PILL = {
+    "LIVE":    "🟢 LIVE",
+    "SHADOW":  "🔵 SHADOW",
+    "OFFLINE": "⚫ OFFLINE",
+}
+_BUCKET_LEGEND = (
+    "🟢 LIVE = influencing trade decisions · "
+    "🔵 SHADOW = predictions logged real-time, decisions unchanged · "
+    "⚫ OFFLINE = registered but no strategy wires it."
+)
+
+
+def _normalize_bucket(row: dict) -> str:
+    """Resolve the deployment bucket for a registry row.
+
+    Prefer the bot's `deployment_bucket` field (added in PR #1391).
+    Fall back to a legacy stage→bucket map for backward compat while
+    the new bot API rolls out.
+    """
+    bucket = row.get("deployment_bucket")
+    if bucket in _BUCKET_PILL:
+        return bucket
+    stage = row.get("target_deployment_stage") or row.get("stage") or ""
+    if stage in ("live_approved", "limited_live", "advisory"):
+        return "LIVE"
+    if stage == "shadow":
+        return "SHADOW"
+    return "OFFLINE"
+
+
+def _format_pill(bucket: str) -> str:
+    return _BUCKET_PILL.get(bucket, "❔ UNKNOWN")
+
 
 def _fmt_age(seconds: float | int | None) -> str:
     if seconds is None:
@@ -755,12 +800,23 @@ def _fmt_age(seconds: float | int | None) -> str:
 def _trainer_status_banner(payload: dict) -> None:
     """Top-of-page banner summarizing trainer VM state.
 
-    Renders a colored callout based on the worst-of:
-    - mirror missing → red ("trainer never published")
-    - mirror present but stale (> 10 min) → yellow ("trainer silent")
-    - service inactive + zero cycles_24h → yellow ("trainer idle, never ran")
-    - cycles_24h > 0 and last_cycle_outcome == 0 → green ("healthy")
-    - cycles_24h > 0 and last_cycle_outcome != 0 → red ("last cycle failed")
+    The trainer runs on a once-a-day systemd timer (``ict-trainer.timer``);
+    between cycles the oneshot ``ict-trainer.service`` is ``inactive
+    (dead)`` and that is normal, not idle. The banner only flags problems
+    when the timer itself is missing/inactive OR the most recent
+    completed cycle failed OR the mirror has gone stale far beyond a
+    normal between-cycles window.
+
+    State priorities (most-severe first):
+      1. ``mirror_missing`` → red (trainer has never published).
+      2. ``last_cycle_failed`` → red (last cycle's overall_rc != 0).
+      3. ``stale_no_timer`` → red (mirror age > 36 h AND timer not
+         active/enabled — really broken).
+      4. ``idle_no_timer`` → yellow (no cycles in 24 h AND timer
+         inactive — really paused).
+      5. ``waiting_for_timer`` → blue/info (timer active, no cycle yet
+         today, last cycle succeeded — the normal between-cycles state).
+      6. ``healthy`` → green (recent successful cycle and timer active).
     """
     if not payload.get("mirror_present"):
         st.error(
@@ -783,36 +839,53 @@ def _trainer_status_banner(payload: dict) -> None:
     svc_active = svc.get("active_state")
     svc_enabled = svc.get("unit_file_state")
     timer_state = timer.get("active_state")
+    timer_enabled = timer.get("unit_file_state")
 
-    is_stale = age is not None and age > 600  # 10 min
-    is_idle = cycles_24h == 0 and svc_active != "active"
+    # Daily-timer architecture: service inactive + timer active+enabled
+    # = normal between-cycles waiting state. Only flag if the timer is
+    # also missing — that's the real "paused" signal.
+    timer_running = timer_state == "active" and timer_enabled == "enabled"
+    really_stale = age is not None and age > 36 * 3600  # 36 h
     last_failed = isinstance(last_rc, int) and last_rc != 0
+    waiting_for_next_cycle = timer_running and cycles_24h == 0 and not last_failed
+    truly_idle = (not timer_running) and cycles_24h == 0
 
     cols = st.columns(4)
     cols[0].metric("Mirror age", age_str)
     cols[1].metric("Cycles (24 h)", cycles_24h)
     cols[2].metric("Service", f"{svc_active or '?'} / {svc_enabled or '?'}")
-    cols[3].metric("Timer", timer_state or "—")
+    cols[3].metric("Timer", f"{timer_state or '?'} / {timer_enabled or '?'}")
 
-    if is_stale:
-        st.error(
-            f"⏳ **Trainer silent** — last publish was {age_str} ago. "
-            "`ict-trainer-publish.timer` may have stalled; Claude can "
-            "investigate autonomously via `trainer-vm-diag-request`."
-        )
-    elif is_idle:
-        st.warning(
-            f"💤 **Trainer idle.** `ict-trainer.service` is `{svc_active}` "
-            f"(unit file `{svc_enabled}`) and no training cycle ran in the "
-            "last 24 h. Daily cadence is controlled by `ict-trainer.timer` — "
-            "Claude can enable it autonomously via `trainer-vm-diag-request` "
-            "(no operator action; trainer-VM systemd is autonomous-Claude "
-            "scope per the charter)."
-        )
-    elif last_failed:
+    if last_failed:
         st.error(
             f"❌ **Last cycle failed** at {last_cycle.get('ts', '?')} with rc={last_rc}. "
             "See the Cycle Events table below for which manifest tripped."
+        )
+    elif really_stale and not timer_running:
+        st.error(
+            f"⏳ **Trainer silent and timer down** — last publish was {age_str} "
+            "ago and `ict-trainer.timer` is not active+enabled. The pipeline "
+            "is genuinely paused."
+        )
+    elif truly_idle:
+        st.warning(
+            f"💤 **Trainer paused.** Timer is `{timer_state or '?'}/{timer_enabled or '?'}` "
+            "and no cycle ran in 24 h. Re-enable via `trainer-vm-diag-request` "
+            "(`systemctl enable --now ict-trainer.timer`)."
+        )
+    elif waiting_for_next_cycle:
+        next_trigger = (
+            timer.get("next_elapse")
+            or timer.get("trigger")
+            or timer.get("next_run")
+            or "—"
+        )
+        last_ts = last_cycle.get("ts") or "—"
+        st.info(
+            f"⏱ **Trainer waiting for next daily cycle.** Timer active; "
+            f"next trigger **{next_trigger}**. Last successful cycle at "
+            f"`{last_ts}` ({age_str} ago). Service `inactive` between "
+            "cycles is normal — this is a oneshot triggered by the timer."
         )
     else:
         st.success(
@@ -847,15 +920,51 @@ def _render_build_health(rows: list[dict]) -> None:
     if not rows:
         st.caption("No dataset-build events mirrored yet.")
         return
+
+    # If the most recent ``build_end`` event reports overall_rc=0, the
+    # most recent build cycle SUCCEEDED — any earlier `failed` rows in
+    # the tail are historical and don't reflect the current state.
+    # Render those as an info expander rather than red errors so the
+    # page doesn't lie about the trainer being broken when it isn't.
+    last_build_end = next(
+        (r for r in reversed(rows) if r.get("status") == "build_end"), None
+    )
+    most_recent_ok = (
+        last_build_end is not None
+        and (last_build_end.get("overall_rc") in (0, "0", None))
+    )
+
     failed = [r for r in rows if r.get("status") == "failed"]
     skipped = [r for r in rows if r.get("status") == "skipped"]
-    if failed:
+
+    if failed and most_recent_ok:
+        # Historical context only — the current pipeline is healthy.
+        with st.expander(
+            f"ℹ️ {len(failed)} historical build failure(s) in the log "
+            "(current cycle succeeded — these are resolved)"
+        ):
+            for row in failed[-5:]:
+                family = row.get("family", "?")
+                tail = (row.get("stderr_tail") or "").strip()
+                st.markdown(f"- **{family}** ({row.get('ts', '?')}) — `{tail[:200]}`")
+    elif failed:
+        # Most recent cycle had failures — these are live issues.
         st.error(f"❌ {len(failed)} dataset build failure(s) in the recent log. "
                  "These block the manifests that depend on them.")
         for row in failed[-5:]:  # newest 5
             family = row.get("family", "?")
             tail = (row.get("stderr_tail") or "").strip()
             st.markdown(f"- **{family}** ({row.get('ts', '?')}) — `{tail[:200]}`")
+    elif last_build_end is None and len(rows) > 0:
+        # No build_end marker yet but builds are happening — building
+        # right now (cycle in progress) or builds haven't completed.
+        st.caption(f"Build cycle in progress — {len(rows)} event(s) so far.")
+    else:
+        st.success(
+            f"✅ Most recent dataset-build cycle succeeded "
+            f"({last_build_end.get('ts', '?')})."
+        )
+
     if skipped:
         with st.expander(f"Skipped families ({len(skipped)})"):
             for row in skipped[-10:]:
@@ -872,50 +981,88 @@ def _render_build_health(rows: list[dict]) -> None:
                          hide_index=True, use_container_width=True, height=240)
 
 
-def _render_registry(registry_rows: list[dict]) -> None:
-    if not registry_rows:
-        st.info(
-            "📭 **Model registry is empty.** No model has been promoted into "
-            "`ml/registry-store/registry.jsonl` yet. This is expected on a "
-            "trainer that has not completed a successful training cycle."
-        )
-        return
+def _short_callable(qualname: str | None) -> str:
+    """`ml.trainers.lightgbm.LightGBMClassifierTrainer` → `LightGBMClassifierTrainer`."""
+    if not isinstance(qualname, str) or not qualname:
+        return "—"
+    return qualname.rsplit(".", 1)[-1]
 
-    # Group by model_id (the registry is append-only with a row per
-    # stage-history event in the canonical schema, but baselines also
-    # write one row per registration).
-    by_model: dict[str, list[dict]] = {}
-    for row in registry_rows:
-        mid = row.get("model_id") or "?"
-        by_model.setdefault(mid, []).append(row)
 
-    st.caption(f"{len(by_model)} distinct model(s) across {len(registry_rows)} registry row(s).")
+def _render_model_card(model_id: str, rows: list[dict]) -> None:
+    """One per-model card: deployment pill + linked strategy + about-this-model
+    summary + latest run metrics + training history + stage history.
 
-    for model_id, rows in sorted(by_model.items()):
-        latest = rows[-1]
-        stage = latest.get("target_deployment_stage") or latest.get("stage") or "unknown"
-        icon = _STAGE_ICON.get(stage, "❔")
-        family = latest.get("model_family") or latest.get("family") or "?"
-        with st.expander(f"{icon} {model_id} · {family} · `{stage}`"):
-            m1, m2, m3 = st.columns(3)
-            trainer = (latest.get("trainer") or "?")
-            evaluator = (latest.get("evaluator") or "?")
-            m1.metric("Trainer", trainer.split(".")[-1] if isinstance(trainer, str) else "?")
-            m2.metric("Evaluator", evaluator.split(".")[-1] if isinstance(evaluator, str) else "?")
-            m3.metric("Stage", stage)
-            ds = latest.get("dataset") or latest.get("dataset_ref") or {}
+    The card consumes the enriched fields from `/api/bot/ml/registry`
+    (PR #1391 in the bot repo): `deployment_bucket`, `linked_strategies`,
+    `model_family`, `trainer`, `evaluator`, `dataset_ref`, `latest_run`.
+    Falls back gracefully when the bot API hasn't been deployed with
+    those fields yet — `_normalize_bucket` derives the bucket from the
+    registry stage as a backstop.
+    """
+    latest = rows[-1]
+    bucket = _normalize_bucket(latest)
+    pill = _format_pill(bucket)
+    stage = latest.get("target_deployment_stage") or latest.get("stage") or "—"
+    family = latest.get("model_family") or latest.get("family") or "—"
+    linked = latest.get("linked_strategies") or []
+
+    with st.container(border=True):
+        # Header — pill + model_id + linked strategy + registry stage
+        head_l, head_r = st.columns([3, 1])
+        with head_l:
+            st.markdown(f"### {pill} · `{model_id}`")
+            if linked:
+                st.caption(f"**Used by:** {', '.join(linked)}")
+            else:
+                st.caption("**Used by:** — (no strategy references this model)")
+        with head_r:
+            st.metric("Registry stage", stage)
+
+        # About — type / class / dataset / decision logic hints
+        st.markdown("**About**")
+        about_l, about_r = st.columns(2)
+        with about_l:
+            st.markdown(f"- **Family:** `{family}`")
+            trainer = latest.get("trainer")
+            if trainer:
+                st.markdown(f"- **Trainer:** `{_short_callable(trainer)}`")
+            evaluator = latest.get("evaluator")
+            if evaluator:
+                st.markdown(f"- **Evaluator:** `{_short_callable(evaluator)}`")
+        with about_r:
+            ds = latest.get("dataset_ref") or latest.get("dataset") or {}
             if isinstance(ds, dict) and ds:
                 st.markdown(
-                    f"**Dataset:** `{ds.get('family')}/{ds.get('symbol_scope')}"
-                    f"/{ds.get('timeframe')}/{ds.get('version')}`"
+                    f"- **Trained on:** `{ds.get('family')}/"
+                    f"{ds.get('symbol_scope')}/{ds.get('timeframe')}/{ds.get('version')}`"
                 )
-            notes = latest.get("notes")
-            if notes:
-                st.caption(notes)
+            if latest.get("created_at"):
+                st.markdown(f"- **First registered:** {latest['created_at']}")
+            if latest.get("code_revision"):
+                rev = str(latest["code_revision"])[:8]
+                st.markdown(f"- **Code revision:** `{rev}`")
 
-            # Per-run metrics drill-down. The cycle log records
-            # metrics_path like
-            # "ml/experiments-runs/<model_id>/<run_id>/metrics.json".
+        notes = latest.get("notes")
+        if notes:
+            st.markdown(f"**Notes:** {notes}")
+
+        # Latest run — metrics + run_id + timestamp.
+        # Prefer the enriched `latest_run` field (PR #1391). Falls back
+        # to the per-run endpoint /api/bot/ml/runs/{model_id}/{run_id}
+        # for backward compat.
+        latest_run = latest.get("latest_run")
+        if isinstance(latest_run, dict) and latest_run:
+            with st.expander("📊 Latest run metrics", expanded=True):
+                rc1, rc2 = st.columns(2)
+                rc1.caption(f"Run: `{latest_run.get('run_id', '—')}`")
+                rc2.caption(f"At: {latest_run.get('at', '—')}")
+                metrics = latest_run.get("metrics") or {}
+                if metrics:
+                    st.json(metrics)
+                else:
+                    st.caption("No metrics recorded for this run.")
+        else:
+            # Backward-compat: try the per-run endpoint.
             run_id = (
                 latest.get("run_id")
                 or (latest.get("metrics_path") or "").split("/")[-2]
@@ -928,33 +1075,93 @@ def _render_registry(registry_rows: list[dict]) -> None:
                 else:
                     metrics = (run_payload or {}).get("metrics") or {}
                     if metrics:
-                        st.markdown("**Latest run metrics**")
-                        st.json(metrics)
+                        with st.expander("📊 Latest run metrics", expanded=True):
+                            st.json(metrics)
 
-            cfg = latest.get("trainer_config") or {}
-            if cfg:
-                with st.expander("Trainer config"):
-                    st.json(cfg)
+        # Training history — every recorded run with its metrics.
+        runs = latest.get("runs") or []
+        if isinstance(runs, list) and len(runs) > 1:
+            with st.expander(f"📈 Training history ({len(runs)} runs)"):
+                history_rows = []
+                for r in runs:
+                    history_rows.append({
+                        "run_id": r.get("run_id"),
+                        "at": r.get("at"),
+                        **(r.get("metrics") or {}),
+                    })
+                st.dataframe(
+                    pd.DataFrame(history_rows),
+                    hide_index=True, use_container_width=True,
+                )
 
-            if len(rows) > 1:
-                with st.expander(f"Stage history ({len(rows)} rows)"):
-                    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        cfg = latest.get("trainer_config") or {}
+        if cfg:
+            with st.expander("⚙️ Trainer config"):
+                st.json(cfg)
+
+        # Stage-transition history (registry mutations over time).
+        if len(rows) > 1:
+            with st.expander(f"📜 Stage history ({len(rows)} rows)"):
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+
+def _render_registry(registry_rows: list[dict]) -> None:
+    if not registry_rows:
+        st.info(
+            "📭 **Model registry is empty.** No model has been promoted into "
+            "`ml/registry-store/registry.jsonl` yet. This is expected on a "
+            "trainer that has not completed a successful training cycle."
+        )
+        return
+
+    # Group by model_id — the registry is append-only with one row per
+    # stage-history event, so a single model may appear N times.
+    by_model: dict[str, list[dict]] = {}
+    for row in registry_rows:
+        mid = row.get("model_id") or "?"
+        by_model.setdefault(mid, []).append(row)
+
+    # Roll-up counters for the operator's two-bucket view.
+    bucket_counts = {"LIVE": 0, "SHADOW": 0, "OFFLINE": 0}
+    for _mid, rows in by_model.items():
+        bucket = _normalize_bucket(rows[-1])
+        bucket_counts[bucket] = bucket_counts.get(bucket, 0) + 1
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Models", len(by_model))
+    c2.metric("🟢 LIVE", bucket_counts["LIVE"])
+    c3.metric("🔵 SHADOW", bucket_counts["SHADOW"])
+    c4.metric("⚫ OFFLINE", bucket_counts["OFFLINE"])
+    st.caption(_BUCKET_LEGEND)
+
+    # Render OFFLINE last so the operator sees the actively-deployed
+    # models first.
+    def _sort_key(item: tuple[str, list[dict]]) -> tuple[int, str]:
+        bucket = _normalize_bucket(item[1][-1])
+        order = {"LIVE": 0, "SHADOW": 1, "OFFLINE": 2}.get(bucket, 3)
+        return (order, item[0])
+
+    for model_id, rows in sorted(by_model.items(), key=_sort_key):
+        _render_model_card(model_id, rows)
 
 
 def page_models() -> None:
     st.header("Models & Training Center")
 
+    # Graceful degradation (2026-05-18): a failed /status fetch used to
+    # `return` and blank the whole page. Now we surface a warning and
+    # render whatever subsections can fetch — operator still sees the
+    # registry, cycle events, and build health even when one endpoint
+    # is unreachable.
     status_payload, status_err = _fetch("/api/bot/ml/status")
     if status_err:
         st.warning(
-            f"Trainer status endpoint unreachable: {status_err}. "
-            "This usually means the bot's FastAPI is older than the "
-            "S-AI-WS8-PART-2 wiring — make sure `/api/bot/ml/status` is "
-            "served from `src/web/api/routers/training_center.py`."
+            f"⚠️ Trainer status endpoint unreachable: {status_err}. "
+            "Status banner skipped — the rest of the page will still render "
+            "with whatever data the other endpoints can fetch."
         )
-        return
-
-    _trainer_status_banner(status_payload or {})
+    else:
+        _trainer_status_banner(status_payload or {})
 
     st.divider()
 
