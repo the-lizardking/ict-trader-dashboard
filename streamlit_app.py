@@ -183,13 +183,14 @@ def fmt_usd(x: float | None) -> str:
 PAGES = [
     "Overview", "Live Chart", "Positions", "Signals",
     "Closed Trades", "Models", "Backtesting", "Strategies",
-    "Health", "Logs",
+    "Health", "Logs", "Demo",
 ]
 
 PAGE_ICONS = {
     "Overview": "\U0001f3e0", "Live Chart": "\U0001f4ca", "Positions": "\U0001f4cb",
     "Signals": "⚡", "Closed Trades": "✅", "Models": "\U0001f9e0",
-    "Backtesting": "\U0001f52c", "Strategies": "♟️", "Health": "\U0001f48a", "Logs": "\U0001f4dc",
+    "Backtesting": "\U0001f52c", "Strategies": "♟️", "Health": "\U0001f48a",
+    "Logs": "\U0001f4dc", "Demo": "\U0001f9ea",
 }
 
 
@@ -1427,6 +1428,97 @@ def page_logs() -> None:
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True, height=600)
 
 
+# ── Demo Account ──────────────────────────────────────────────────────────────
+
+_DEMO_ACCOUNT_ID = "bybit_1"
+
+
+def page_demo() -> None:
+    st.header("🧪 Demo Trader (bybit_1)")
+    st.caption(
+        "Paper-money account on Bybit demo endpoint (api-demo.bybit.com). "
+        "Runs all three strategies at live settings. "
+        "Trades are logged separately and excluded from live PnL totals."
+    )
+
+    # ── PnL snapshot from /api/pnl ─────────────────────────────────────────
+    pnl_all, pnl_err = _fetch("/api/pnl")
+    if pnl_err:
+        st.warning(f"PnL endpoint error: {pnl_err}")
+    else:
+        acct = ((pnl_all or {}).get("accounts") or {}).get(_DEMO_ACCOUNT_ID) or {}
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Realised PnL",  fmt_usd(acct.get("realized_usd")))
+        c2.metric("Unrealised PnL", fmt_usd(acct.get("unrealized_usd")))
+        c3.metric("Trades today",  acct.get("trades_today", 0))
+
+    # ── PnL history chart ──────────────────────────────────────────────────
+    st.subheader("Realised PnL — last 30 days")
+    hist, hist_err = _fetch(f"/api/pnl/history?days=30&account_id={_DEMO_ACCOUNT_ID}")
+    if hist_err:
+        st.info(f"PnL history unavailable: {hist_err}")
+    elif not hist:
+        st.caption("No closed demo trades yet.")
+    else:
+        df_hist = pd.DataFrame(hist)
+        if "date" in df_hist.columns and "pnl" in df_hist.columns:
+            df_hist["cumulative"] = df_hist["pnl"].cumsum()
+            fig = go.Figure()
+            fig.add_bar(x=df_hist["date"], y=df_hist["pnl"], name="Daily PnL",
+                        marker_color=[_TV_GREEN if v >= 0 else _TV_RED for v in df_hist["pnl"]])
+            fig.add_scatter(x=df_hist["date"], y=df_hist["cumulative"],
+                            name="Cumulative", line={"color": _TV_EMA20, "width": 2})
+            fig.update_layout(
+                paper_bgcolor=_TV_BG, plot_bgcolor=_TV_GRID,
+                font={"color": _TV_TEXT}, height=260,
+                legend={"orientation": "h", "y": 1.1},
+                margin={"l": 40, "r": 10, "t": 10, "b": 40},
+            )
+            st.plotly_chart(fig, use_container_width=True, config=_CHART_CONFIG)
+
+    # ── Open positions ─────────────────────────────────────────────────────
+    st.subheader("Open Positions")
+    pos_all, pos_err = _fetch("/api/bot/positions")
+    if pos_err:
+        st.warning(pos_err)
+    else:
+        demo_pos = [p for p in (pos_all or []) if p.get("account") == _DEMO_ACCOUNT_ID]
+        if not demo_pos:
+            st.caption("No open demo positions.")
+        else:
+            st.dataframe(pd.DataFrame(demo_pos), hide_index=True, use_container_width=True)
+
+    # ── Closed trades ──────────────────────────────────────────────────────
+    st.subheader(f"Closed Trades (last {DEFAULT_LIMIT})")
+    trades, trades_err = _fetch(
+        f"/api/bot/trades/closed?limit={DEFAULT_LIMIT}&account_id={_DEMO_ACCOUNT_ID}"
+    )
+    if trades_err:
+        st.warning(trades_err)
+    elif not trades:
+        st.caption("No closed demo trades.")
+    else:
+        df_t = pd.DataFrame(trades)
+        cols = [c for c in ["openedAt", "closedAt", "symbol", "side", "pattern",
+                             "qty", "entryPrice", "exitPrice",
+                             "realizedPnl", "realizedPnlPct", "closeReason"] if c in df_t.columns]
+        st.dataframe(df_t[cols] if cols else df_t, hide_index=True, use_container_width=True)
+
+        # Per-strategy summary
+        if "pattern" in df_t.columns and "realizedPnl" in df_t.columns:
+            st.subheader("Strategy Breakdown")
+            grp = (
+                df_t.groupby("pattern", dropna=False)
+                .agg(trades=("realizedPnl", "count"),
+                     total_pnl=("realizedPnl", "sum"),
+                     win_rate=("realizedPnl", lambda x: round((x > 0).mean() * 100, 1)))
+                .reset_index()
+                .sort_values("total_pnl", ascending=False)
+            )
+            grp.columns = ["Strategy", "Trades", "Total PnL ($)", "Win Rate (%)"]
+            st.dataframe(grp, hide_index=True, use_container_width=True)
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -1444,6 +1536,7 @@ def main() -> None:
         "Strategies":    page_strategies,
         "Health":        page_health,
         "Logs":          page_logs,
+        "Demo":          page_demo,
     }
     dispatch.get(page, page_overview)()
 
