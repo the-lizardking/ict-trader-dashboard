@@ -739,12 +739,18 @@ _STAGE_ICON = {
     "backtest_approved": "\U0001f7e4", "candidate": "⚪", "research_only": "⚫",
 }
 
-# Operator's 2-bucket deployment view (2026-05-18). Collapses the 7
-# registry stages into "is this model influencing real money or just
-# observing?":
-#   LIVE    — predictions influence trade decisions on live accounts.
+# Operator's 3-bucket deployment view (2026-05-18; default-flip update
+# 2026-05-19). Collapses the 7 registry stages into "is this model
+# influencing real money, just observing, or parked?":
+#   LIVE    — predictions influence trade decisions on live accounts
+#             (stages: advisory / limited_live / live_approved).
 #   SHADOW  — predictions logged in real time but decisions unchanged.
-#   OFFLINE — model exists in the registry but no strategy references it.
+#             SHADOW is the default for any freshly-trained model since
+#             the 2026-05-19 default flip; the lifecycle is
+#             register-into-shadow → backtest gate → promote to LIVE.
+#   OFFLINE — operator-parked: stages research_only / candidate /
+#             backtest_approved. Reached only by explicit demotion
+#             from shadow; not a default state for new models.
 #
 # Source of truth: the bot's /api/bot/ml/registry endpoint returns
 # ``deployment_bucket`` per row (PR #1391). The dashboard prefers that
@@ -758,8 +764,9 @@ _BUCKET_PILL = {
 }
 _BUCKET_LEGEND = (
     "🟢 LIVE = influencing trade decisions · "
-    "🔵 SHADOW = predictions logged real-time, decisions unchanged · "
-    "⚫ OFFLINE = registered but no strategy wires it."
+    "🔵 SHADOW = predictions logged real-time, decisions unchanged "
+    "(default for fresh models) · "
+    "⚫ OFFLINE = operator-parked, not in the shadow channel."
 )
 
 
